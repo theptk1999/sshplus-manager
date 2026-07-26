@@ -221,7 +221,7 @@ show_menu() {
   print_row "12" "จัดการพอร์ต         " "26" "System Optimizer   " "${MENU_CYAN}→${MENU_NC}"
   print_row "13" "ทดสอบความเร็ว       " "27" "Xray (Reality)     " "$stat_v2ray"
   print_row "14" "เคลียร์แรม/Cache    " "28" "อัปเดต (GitHub)    " ""
-  print_row "00" "ออกจากเมนู         " "29" "ถอนการติดตั้ง      " "${RED}⚠️${NC}"
+  print_row "00" "ออกจากเมนู          " "29" "ถอนการติดตั้ง      " "${RED}⚠️${NC}"
 
   echo -e "${LINE}"
   printf " %sเลือกเมนู (Select Option): %s" "$MENU_GREEN" "$MENU_NC"
