@@ -22,7 +22,7 @@ service_active() {
   local svc="${1:-}"
 
   if declare -F svc_is_active >/dev/null 2>&1; then
-    svc_is_active "$svc"
+    svc_is_active "${svc:-}"
     return $?
   fi
 
