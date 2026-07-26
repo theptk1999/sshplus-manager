@@ -166,7 +166,8 @@ function_trafego() {
 
 function_firewall() {
   if ! command -v ufw >/dev/null 2>&1; then
-    install_pkg "ufw"
+    apt-get update -y >/dev/null 2>&1 || true
+    apt-get install -y ufw >/dev/null 2>&1 || true
   fi
   if ! command -v ufw >/dev/null 2>&1; then
     log_error "ติดตั้ง ufw ไม่สำเร็จ กรุณาติดตั้งเอง: apt install ufw"
