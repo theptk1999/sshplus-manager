@@ -82,7 +82,7 @@ get_ssh_port() {
   fi
 }
 
-# Why: ตรวจสอบว่ามี process ฟัง port อยู่แล้วหรือไม่
+# Why: ตรวจสอบว่ามี process ฟัง port อยู่แล้วหรือไม่ เพื่อป้องกัน port conflict
 is_port_in_use() {
   local port="${1:-}"
   is_port "$port" || return 1
@@ -95,81 +95,7 @@ is_port_in_use() {
   fi
 }
 
-# Why: backup ไฟล์ config ก่อนแก้ไข
-backup_file() {
-  local file="${1:-}"
-  [[ -f "$file" ]] || return 1
-  local stamp
-  stamp="$(date +%Y%m%d_%H%M%S)"
-  cp -a "$file" "${file}.bak.${stamp}" 2>/dev/null || true
-  echo "${file}.bak.${stamp}"
-}
-
-# Why: อ่าน SSH port ปัจจุบันจาก sshd_config
-get_ssh_port() {
-  local cfg="/etc/ssh/sshd_config"
-  local port="22"
-  if [[ -f "$cfg" ]]; then
-    port="$(awk '/^Port/ {print $2; exit}' "$cfg" 2>/dev/null || true)"
-  fi
-  if is_port "$port"; then
-    echo "$port"
-  else
-    echo "22"
-  fi
-}
-
-# Why: ตรวจสอบว่า port ถูกใช้งานอยู่แล้วหรือไม่
-is_port_in_use() {
-  local port="${1:-}"
-  is_port "$port" || return 1
-  if command -v ss >/dev/null 2>&1; then
-    ss -tuln 2>/dev/null | grep -q ":${port} "
-  elif command -v netstat >/dev/null 2>&1; then
-    netstat -tuln 2>/dev/null | grep -q ":${port} "
-  else
-    return 1
-  fi
-}
-
-# Why: backup ไฟล์ config ก่อนแก้ไข
-backup_file() {
-  local file="${1:-}"
-  [[ -f "$file" ]] || return 1
-  local stamp
-  stamp="$(date +%Y%m%d_%H%M%S)"
-  cp -a "$file" "${file}.bak.${stamp}" 2>/dev/null || true
-  echo "${file}.bak.${stamp}"
-}
-
-# Why: อ่าน SSH port ปัจจุบันจาก sshd_config
-get_ssh_port() {
-  local cfg="/etc/ssh/sshd_config"
-  local port="22"
-  if [[ -f "$cfg" ]]; then
-    port="$(awk '/^Port/ {print $2; exit}' "$cfg" 2>/dev/null || true)"
-  fi
-  if is_port "$port"; then
-    echo "$port"
-  else
-    echo "22"
-  fi
-}
-
-# Why: ตรวจสอบว่า port ถูกใช้งานอยู่แล้วหรือไม่
-is_port_in_use() {
-  local port="${1:-}"
-  is_port "$port" || return 1
-  if command -v ss >/dev/null 2>&1; then
-    ss -tuln 2>/dev/null | grep -q ":${port} "
-  elif command -v netstat >/dev/null 2>&1; then
-    netstat -tuln 2>/dev/null | grep -q ":${port} "
-  else
-    return 1
-  fi
-}
-
-# Why: backup ไฟล์ config ก่อนแก้ไข
+# Why: backup ไฟล์ config ก่อนแก้ไข เพื่อ rollback ได้ทันที
 backup_file() {
   local file="${1:-}"
   [[ -f "$file" ]] || return 1
