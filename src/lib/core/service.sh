@@ -15,7 +15,8 @@ svc_logs() {
 }
 
 svc_start() {
-  local svc="${1:-}" clean_svc="${svc%.service}"
+  local svc="${1:-}"
+  local clean_svc="${svc%.service}"
   [[ -z "${svc:-}" ]] && return 1
   command -v systemctl >/dev/null 2>&1 && systemctl start "${svc:-}" >/dev/null 2>&1 && return 0
   command -v service >/dev/null 2>&1 && service "${clean_svc:-}" start >/dev/null 2>&1 && return 0
@@ -25,7 +26,8 @@ svc_start() {
 }
 
 svc_stop() {
-  local svc="${1:-}" clean_svc="${svc%.service}"
+  local svc="${1:-}"
+  local clean_svc="${svc%.service}"
   [[ -z "${svc:-}" ]] && return 1
   command -v systemctl >/dev/null 2>&1 && systemctl stop "${svc:-}" >/dev/null 2>&1 && return 0
   command -v service >/dev/null 2>&1 && service "${clean_svc:-}" stop >/dev/null 2>&1 && return 0
@@ -35,7 +37,8 @@ svc_stop() {
 }
 
 svc_restart() {
-  local svc="${1:-}" clean_svc="${svc%.service}"
+  local svc="${1:-}"
+  local clean_svc="${svc%.service}"
   [[ -z "${svc:-}" ]] && return 1
   command -v systemctl >/dev/null 2>&1 && systemctl restart "${svc:-}" >/dev/null 2>&1 && return 0
   command -v service >/dev/null 2>&1 && service "${clean_svc:-}" restart >/dev/null 2>&1 && return 0
@@ -45,7 +48,8 @@ svc_restart() {
 }
 
 svc_enable() {
-  local svc="${1:-}" clean_svc="${svc%.service}"
+  local svc="${1:-}"
+  local clean_svc="${svc%.service}"
   [[ -z "${svc:-}" ]] && return 1
   command -v systemctl >/dev/null 2>&1 && systemctl enable "${svc:-}" >/dev/null 2>&1 && return 0
   command -v chkconfig >/dev/null 2>&1 && chkconfig "${clean_svc:-}" on >/dev/null 2>&1 && return 0
@@ -55,7 +59,8 @@ svc_enable() {
 }
 
 svc_disable() {
-  local svc="${1:-}" clean_svc="${svc%.service}"
+  local svc="${1:-}"
+  local clean_svc="${svc%.service}"
   [[ -z "${svc:-}" ]] && return 1
   command -v systemctl >/dev/null 2>&1 && systemctl disable "${svc:-}" >/dev/null 2>&1 && return 0
   command -v chkconfig >/dev/null 2>&1 && chkconfig "${clean_svc:-}" off >/dev/null 2>&1 && return 0
@@ -65,7 +70,8 @@ svc_disable() {
 }
 
 svc_is_active() {
-  local svc="${1:-}" clean_svc="${svc%.service}"
+  local svc="${1:-}"
+  local clean_svc="${svc%.service}"
   [[ -z "${svc:-}" ]] && return 1
   command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${svc:-}" 2>/dev/null && return 0
   command -v service >/dev/null 2>&1 && service "${clean_svc:-}" status >/dev/null 2>&1 && return 0
