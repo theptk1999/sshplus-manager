@@ -130,9 +130,9 @@ function_self_update() {
   # Why: ติดตั้งไฟล์ใหม่ทับที่เดิม
   if [[ -f dist/sshplus.sh ]]; then
     install -m 755 dist/sshplus.sh "$target_bin"
-    log_info "อัปเดตสำเร็จ! เวอร์ชันใหม่พร้อมใช้งาน"
-    echo
-    echo -e "  ${GREEN}รันด้วย: sshplus${NC}"
+        log_info "อัปเดตสำเร็จ! กำลังรีสตาร์ทเพื่อใช้เวอร์ชันใหม่..."
+    sleep 2
+    exec /usr/local/sbin/sshplus
   else
     log_error "ไม่พบ dist/sshplus.sh หลัง build"
   fi
