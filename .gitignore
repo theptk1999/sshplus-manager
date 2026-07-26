@@ -1,0 +1,13 @@
+dist/
+*.log
+*.bak
+*.tmp
+.bats-tmp/
+.env
+*.env
+*.key
+*.pem
+id_rsa
+id_ed25519
+usuarios.db
+usuarios.db.lock

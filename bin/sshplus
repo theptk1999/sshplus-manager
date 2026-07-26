@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# ==================================================
+# SSHPlus Manager - Development Entrypoint
+# Why: โหลด module ตามลำดับที่ถูกต้อง แล้วเรียก main
+# ==================================================
+
+# Why: strict mode ลด bug จากตัวแปรที่ไม่ได้กำหนด
+set -u
+set -o pipefail
+
+# Why: ทำให้ parsing ข้อความ/ตัวเลขคงที่ ไม่ขึ้นกับ locale
+export LC_ALL=C
+
+# Why: ไฟล์ที่สร้างใหม่ควรมีสิทธิ์ปลอดภัยโดยค่าเริ่มต้น
+umask 077
+
+# Why: หา root directory ของโปรเจกต์จากตำแหน่งของ bin/sshplus
+APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Why: โหลด module หนึ่งไฟล์ พร้อม guard ว่าไฟล์ต้องมีอยู่จริง
+source_file() {
+  local file_path="$1"
+
+  if [[ ! -f "$file_path" ]]; then
+    echo "[ERROR] Missing module: $file_path" >&2
+    exit 1
+  fi
+
+  # shellcheck source=/dev/null
+  source "$file_path"
+}
+
+# Why: โหลด core ก่อน เพราะ module อื่นต้องพึ่ง log/guard/validation
+source_file "$APP_ROOT/src/lib/core/log.sh"
+source_file "$APP_ROOT/src/lib/core/guard.sh"
+source_file "$APP_ROOT/src/lib/core/validation.sh"
+
+# Why: โหลด data layer ก่อน feature ที่ต้องใช้ DB
+source_file "$APP_ROOT/src/lib/data/user_db.sh"
+
+# Why: โหลด main เป็นตัวสุดท้าย เพราะมี dispatcher/menu
+source_file "$APP_ROOT/src/main.sh"
+
+# Why: เรียก main ของแอปจริง
+main "$@"
