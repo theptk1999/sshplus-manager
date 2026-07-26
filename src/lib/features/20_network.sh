@@ -165,7 +165,14 @@ function_trafego() {
 }
 
 function_firewall() {
-  command -v ufw >/dev/null 2>&1 || install_pkg "ufw"
+  if ! command -v ufw >/dev/null 2>&1; then
+    install_pkg "ufw"
+  fi
+  if ! command -v ufw >/dev/null 2>&1; then
+    log_error "ติดตั้ง ufw ไม่สำเร็จ กรุณาติดตั้งเอง: apt install ufw"
+    pause
+    return
+  fi
   while true; do
     clear_screen
     echo -e "${BLUE}│${WHITE} 1) เปิด Firewall (Safe Enable)  ${NC}${BLUE}│${NC}"
