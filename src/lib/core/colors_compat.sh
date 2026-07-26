@@ -1,0 +1,11 @@
+# Why: alias สีจาก log.sh ให้ตรงกับโค้ดเดิมที่ใช้ $RED $GREEN etc.
+RED="${SSHPLUS_RED:-}"
+GREEN="${SSHPLUS_GREEN:-}"
+YELLOW="${SSHPLUS_YELLOW:-}"
+BLUE="${SSHPLUS_BLUE:-}"
+CYAN="${SSHPLUS_CYAN:-}"
+WHITE="${SSHPLUS_WHITE:-}"
+BG_RED="${SSHPLUS_BG_RED:-\033[41;1;37m}"
+NC="${SSHPLUS_NC:-}"
+ON="${GREEN}●${NC}"
+OFF="${RED}○${NC}"
