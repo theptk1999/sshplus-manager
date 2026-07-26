@@ -58,6 +58,8 @@ main() {
       25) function_openvpn ;;
       26) function_optimize_system ;;
       27) function_v2ray_manager ;;
+      28) function_self_update ;;
+      29) function_uninstall ;;
       00|0)
         if declare -F clear_screen >/dev/null 2>&1; then
           clear_screen

@@ -6,7 +6,9 @@
 svc_daemon_reload() { command -v systemctl >/dev/null 2>&1 && systemctl daemon-reload >/dev/null 2>&1 || true; }
 
 svc_logs() {
-  local svc="${1:-}" lines="${2:-50}" clean_svc="${svc%.service}"
+  local svc="${1:-}"
+  local lines="${2:-50}"
+  local clean_svc="${svc%.service}"
   [[ -z "${svc:-}" ]] && return 1
   if command -v journalctl >/dev/null 2>&1; then journalctl -u "${svc:-}" -n "$lines" --no-pager
   elif [[ -f /var/log/syslog ]]; then tail -n "$lines" /var/log/syslog | grep -i "${clean_svc:-}" || true
