@@ -336,7 +336,7 @@ function_ferramentas() {
   esac
 }
 
-# Why: เมนู WebSocket proxy v2.0 รองรับ RFC 6455
+# Why: เมนู WebSocket proxy v2.1 รองรับ RFC 6455 + Smart Detection
 function_websocket() {
   clear_screen
   local status_ws
@@ -353,7 +353,7 @@ function_websocket() {
       is_port_in_use "$ws_port" && { log_error "Port ถูกใช้แล้ว"; pause; return; }
       local csp
       csp="$(get_ssh_port)"
-      log_info "Generating WS Proxy v2.0..."
+      log_info "Generating WS Proxy v2.1..."
 
       cat <<'WSEOF' > "$WS_SCRIPT"
 #!/usr/bin/env python3
@@ -567,20 +567,48 @@ def ws_frame_relay(client,target):
 def handler(client_socket,client_addr,ssh_port):
     stats.connect()
     peer=f"{client_addr[0]}:{client_addr[1]}"
+    target_socket=None
     try:
         set_keepalive(client_socket)
-        target_socket=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-        set_keepalive(target_socket)
-        target_socket.settimeout(10)
-        target_socket.connect((SSH_ADDR,ssh_port))
-        target_socket.settimeout(None)
         client_socket.settimeout(15)
-        first_payload=client_socket.recv(BUFFER_SIZE)
+        first_payload=bytearray()
+        chunk=client_socket.recv(BUFFER_SIZE)
+        if chunk:
+            first_payload.extend(chunk)
+        if first_payload:
+            first_line=first_payload.split(b"\r\n")[0].decode("utf-8",errors="ignore")
+            looks_http=(first_line.startswith("GET ") or first_line.startswith("POST ") or
+                        first_line.startswith("CONNECT ") or first_line.startswith("HEAD ") or
+                        "HTTP/1." in first_line)
+            if looks_http and b"\r\n\r\n" not in first_payload:
+                client_socket.settimeout(5)
+                try:
+                    while b"\r\n\r\n" not in first_payload and len(first_payload)<BUFFER_SIZE:
+                        chunk=client_socket.recv(BUFFER_SIZE)
+                        if not chunk:
+                            break
+                        first_payload.extend(chunk)
+                except socket.timeout:
+                    pass
         client_socket.settimeout(None)
         if not first_payload:
             return
+        first_payload=bytes(first_payload)
         header_text=first_payload.decode("utf-8",errors="ignore")
-        is_http=(header_text.startswith("GET ") or header_text.startswith("POST ") or header_text.startswith("CONNECT ") or header_text.startswith("HEAD ") or "HTTP/1." in header_text.split("\r\n")[0])
+        is_http=(header_text.startswith("GET ") or header_text.startswith("POST ") or
+                 header_text.startswith("CONNECT ") or header_text.startswith("HEAD ") or
+                 "HTTP/1." in header_text.split("\r\n")[0])
+        target_socket=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+        set_keepalive(target_socket)
+        try:
+            target_socket.settimeout(10)
+            target_socket.connect((SSH_ADDR,ssh_port))
+            target_socket.settimeout(None)
+        except Exception as e:
+            logger.error(f"[{peer}] Backend connection failed (Port {ssh_port}): {e}")
+            if is_http:
+                client_socket.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+            return
         if is_http:
             headers=parse_http_headers(first_payload)
             ws_key=headers.get("sec-websocket-key","")
@@ -610,10 +638,11 @@ def handler(client_socket,client_addr,ssh_port):
         logger.error(f"[{peer}] Unexpected: {exc}")
     finally:
         close_socket(client_socket)
-        try:
-            close_socket(target_socket)
-        except Exception:
-            pass
+        if target_socket:
+            try:
+                close_socket(target_socket)
+            except Exception:
+                pass
         stats.disconnect()
 
 def stats_reporter():
@@ -633,7 +662,7 @@ def server(listen_port,ssh_port):
         logger.critical(f"Cannot bind to port {listen_port}: {exc}")
         sys.exit(1)
     server_socket.listen(1024)
-    logger.info("SSHPlus WS Proxy v2.0 started")
+    logger.info("SSHPlus WS Proxy v2.1 started")
     logger.info(f"Listening: {BIND_ADDR}:{listen_port} -> SSH {SSH_ADDR}:{ssh_port}")
     logger.info("Modes: Raw TCP | HTTP Upgrade | WebSocket (RFC 6455)")
     stats_thread=threading.Thread(target=stats_reporter,daemon=True)
@@ -681,7 +710,7 @@ if __name__=="__main__":
 WSEOF
 
       chmod 700 "$WS_SCRIPT"
-      svc_provision "sshplus-ws" "SSHPlus WS Proxy v2.0" "/usr/bin/python3 $WS_SCRIPT $ws_port $csp" "" "LimitNOFILE=51200
+      svc_provision "sshplus-ws" "SSHPlus WS Proxy v2.1" "/usr/bin/python3 $WS_SCRIPT $ws_port $csp" "" "LimitNOFILE=51200
 NoNewPrivileges=true"
       svc_daemon_reload
       svc_enable sshplus-ws
