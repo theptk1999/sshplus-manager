@@ -3,7 +3,6 @@
 # Why: จัดการ limiter, badvpn, bot, auto menu, tools, websocket
 # ==================================================
 
-# Why: เปิด/ปิด SSH Limiter service
 function_toggle_limit() {
   if svc_is_active sshplus-limiter; then
     svc_stop sshplus-limiter
@@ -13,9 +12,7 @@ function_toggle_limit() {
     sleep 1
     return
   fi
-
   log_info "กำลังสร้าง SSH Limiter..."
-
   cat <<'LIMEOF' > "$LIMIT_SCRIPT"
 #!/bin/bash
 DB_FILE="/root/usuarios.db"
@@ -37,7 +34,6 @@ while true; do
   sleep 4
 done
 LIMEOF
-
   chmod 700 "$LIMIT_SCRIPT"
   svc_provision "sshplus-limiter" "SSHPlus Limiter" "/bin/bash $LIMIT_SCRIPT" "" "LimitNOFILE=51200
 NoNewPrivileges=true"
@@ -48,7 +44,6 @@ NoNewPrivileges=true"
   sleep 1
 }
 
-# Why: เปิด/ปิด BadVPN UDPGW
 function_toggle_badvpn() {
   clear_screen
   if svc_is_active badvpn; then
@@ -73,7 +68,6 @@ NoNewPrivileges=true"
   sleep 1
 }
 
-# Why: เมนูจัดการ Telegram bot
 function_toggle_bot() {
   clear_screen
   local sb
@@ -109,7 +103,6 @@ ReadWritePaths=/var/log"
       chmod 700 "$BOT_ENV_DIR"
       printf 'BOT_TOKEN=%s\nADMIN_ID=%s\n' "$bt" "$ci" > "$BOT_ENV_FILE"
       chmod 600 "$BOT_ENV_FILE"
-
       cat <<'BOTPY' > "$BOT_SCRIPT"
 #!/usr/bin/env python3
 import os,sys,subprocess,time,datetime,fcntl,logging,re,html
@@ -126,26 +119,21 @@ try:
 except ImportError:
     subprocess.run([sys.executable,"-m","pip","install","requests","--break-system-packages"],check=False,capture_output=True)
     import requests
-
 def rc(a,i=None):
     return subprocess.run(a,input=i,text=True,capture_output=True,check=False)
-
 def ue(u):
     return rc(["id",u]).returncode==0
-
 def rl():
     if not os.path.exists(DB):
         return []
     with open(DB) as f:
         return [l.strip() for l in f if l.strip()]
-
 def wl(ls):
     t=DB+".tmp"
     with open(t,"w") as f:
         f.write("\n".join(ls)+"\n" if ls else "")
     os.chmod(t,0o600)
     os.replace(t,DB)
-
 def ups(u,li,ex):
     with open(LK,"w") as lf:
         fcntl.flock(lf,fcntl.LOCK_EX)
@@ -154,7 +142,6 @@ def ups(u,li,ex):
         ls.append(f"{u}:{li}:{ex}")
         wl(ls)
         fcntl.flock(lf,fcntl.LOCK_UN)
-
 def dele(u):
     with open(LK,"w") as lf:
         fcntl.flock(lf,fcntl.LOCK_EX)
@@ -162,13 +149,11 @@ def dele(u):
         ls=[l for l in ls if not l.startswith(f"{u}:")]
         wl(ls)
         fcntl.flock(lf,fcntl.LOCK_UN)
-
 def sm(t,cid=None):
     try:
         requests.post(f"https://api.telegram.org/bot{TK}/sendMessage",data={"chat_id":cid or AI,"text":t,"parse_mode":"HTML"},timeout=10)
     except Exception as e:
         logging.error(e)
-
 def gu(o):
     try:
         r=requests.get(f"https://api.telegram.org/bot{TK}/getUpdates",params={"offset":o,"timeout":30},timeout=35)
@@ -176,7 +161,6 @@ def gu(o):
     except Exception:
         time.sleep(5)
         return None
-
 def ca(a):
     if len(a)<4:
         return "รูปแบบ: /add user pass days limit"
@@ -204,7 +188,6 @@ def ca(a):
         return f"❌ DB error: {html.escape(str(e))}"
     eh=datetime.datetime.fromtimestamp(ex).strftime("%d/%m/%Y")
     return f"✅ <b>{html.escape(u)}</b>\nรหัส: {html.escape(p)}\nวัน: {di}\nจอ: {li}\nหมดอายุ: {eh}"
-
 def cd(a):
     if len(a)<1:
         return "รูปแบบ: /del user"
@@ -214,7 +197,6 @@ def cd(a):
     rc(["userdel","--force",u])
     dele(u)
     return f"🗑 ลบ {html.escape(u)} แล้ว"
-
 def cl():
     try:
         with open(LK,"w") as lf:
@@ -235,7 +217,6 @@ def cl():
         return m
     except Exception as e:
         return f"❌ {html.escape(str(e))}"
-
 def main():
     logging.info("Bot started")
     sm("🤖 บอทเริ่มทำงาน!\n/add ชื่อ รหัส วัน จอ\n/del ชื่อ\n/list")
@@ -271,11 +252,9 @@ def main():
                     logging.critical(e)
                     sm(f"⚠️ {html.escape(str(e))}")
         time.sleep(1)
-
 if __name__=="__main__":
     main()
 BOTPY
-
       chmod 700 "$BOT_SCRIPT"
       svc_daemon_reload
       svc_is_active sshplus-bot && svc_restart sshplus-bot
@@ -295,7 +274,6 @@ BOTPY
   esac
 }
 
-# Why: สลับ auto menu เมื่อ root login
 function_auto_menu() {
   clear_screen
   local bashrc="/root/.bashrc"
@@ -311,7 +289,6 @@ function_auto_menu() {
   sleep 1
 }
 
-# Why: รวมเครื่องมือเสริม
 function_ferramentas() {
   clear_screen
   echo "1) Speedtest  2) Fail2ban  3) UFW  4) Auto-Start  5) Reboot  0) กลับ"
@@ -336,7 +313,6 @@ function_ferramentas() {
   esac
 }
 
-# Why: เมนู WebSocket proxy v2.1 รองรับ RFC 6455 + Smart Detection
 function_websocket() {
   clear_screen
   local status_ws
@@ -354,22 +330,18 @@ function_websocket() {
       local csp
       csp="$(get_ssh_port)"
       log_info "Generating WS Proxy v2.1..."
-
       cat <<'WSEOF' > "$WS_SCRIPT"
 #!/usr/bin/env python3
 import socket,threading,select,signal,sys,time,struct,hashlib,base64,logging
 from typing import Optional,Tuple
-
 BIND_ADDR="0.0.0.0"
 SSH_ADDR="127.0.0.1"
 BUFFER_SIZE=8192
 IDLE_TIMEOUT=300
 MAX_CONNECTIONS=1000
 WS_MAGIC="258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-
 logging.basicConfig(level=logging.INFO,format="%(asctime)s [%(levelname)s] %(message)s",datefmt="%Y-%m-%d %H:%M:%S")
 logger=logging.getLogger("ws-proxy")
-
 class Stats:
     def __init__(self):
         self._lock=threading.Lock()
@@ -393,19 +365,15 @@ class Stats:
             h,m=divmod(uptime,3600)
             m//=60
             return f"uptime={h}h{m}m active={self.active} total={self.total} rejected={self.rejected}"
-
 stats=Stats()
 shutdown_event=threading.Event()
-
 def signal_handler(signum,frame):
     sig_name=signal.Signals(signum).name
     logger.info(f"Received {sig_name}, shutting down...")
     logger.info(f"Final stats: {stats.summary()}")
     shutdown_event.set()
-
 signal.signal(signal.SIGTERM,signal_handler)
 signal.signal(signal.SIGINT,signal_handler)
-
 def close_socket(sock):
     try:
         sock.shutdown(socket.SHUT_RDWR)
@@ -416,7 +384,6 @@ def close_socket(sock):
             sock.close()
         except OSError:
             pass
-
 def set_keepalive(sock):
     try:
         sock.setsockopt(socket.SOL_SOCKET,socket.SO_KEEPALIVE,1)
@@ -428,11 +395,9 @@ def set_keepalive(sock):
             sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_KEEPCNT,3)
     except OSError:
         pass
-
 def ws_accept_key(key):
     digest=hashlib.sha1((key.strip()+WS_MAGIC).encode()).digest()
     return base64.b64encode(digest).decode()
-
 def parse_http_headers(data):
     headers={}
     try:
@@ -444,7 +409,6 @@ def parse_http_headers(data):
     except Exception:
         pass
     return headers
-
 def _recv_exact(sock,n):
     data=bytearray()
     while len(data)<n:
@@ -456,7 +420,6 @@ def _recv_exact(sock,n):
         except OSError:
             return None
     return bytes(data)
-
 def read_ws_frame(sock):
     try:
         header=_recv_exact(sock,2)
@@ -494,7 +457,6 @@ def read_ws_frame(sock):
         return opcode,payload,fin
     except (OSError,struct.error):
         return None
-
 def build_ws_frame(opcode,payload):
     frame=bytearray()
     frame.append(0x80|opcode)
@@ -509,7 +471,6 @@ def build_ws_frame(opcode,payload):
         frame.extend(struct.pack("!Q",length))
     frame.extend(payload)
     return bytes(frame)
-
 def raw_tcp_relay(client,target):
     try:
         while not shutdown_event.is_set():
@@ -528,7 +489,6 @@ def raw_tcp_relay(client,target):
                 client.sendall(data)
     except OSError:
         pass
-
 def ws_frame_relay(client,target):
     try:
         while not shutdown_event.is_set():
@@ -563,7 +523,6 @@ def ws_frame_relay(client,target):
                 client.sendall(ws_frame)
     except OSError:
         pass
-
 def handler(client_socket,client_addr,ssh_port):
     stats.connect()
     peer=f"{client_addr[0]}:{client_addr[1]}"
@@ -595,9 +554,8 @@ def handler(client_socket,client_addr,ssh_port):
             return
         first_payload=bytes(first_payload)
         header_text=first_payload.decode("utf-8",errors="ignore")
-        is_http=(header_text.startswith("GET ") or header_text.startswith("POST ") or
-                 header_text.startswith("CONNECT ") or header_text.startswith("HEAD ") or
-                 "HTTP/1." in header_text.split("\r\n")[0])
+        fl=header_text.split("\r\n")[0]
+        is_http=fl[:4] in ("GET ","POST","HEAD") or fl[:8]=="CONNECT " or "HTTP/1." in fl
         target_socket=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
         set_keepalive(target_socket)
         try:
@@ -605,9 +563,11 @@ def handler(client_socket,client_addr,ssh_port):
             target_socket.connect((SSH_ADDR,ssh_port))
             target_socket.settimeout(None)
         except Exception as e:
-            logger.error(f"[{peer}] Backend connection failed (Port {ssh_port}): {e}")
+            logger.error(f"[{peer}] Backend failed (Port {ssh_port}): {e}")
             if is_http:
-                client_socket.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+                err502=b"HTTP/1.1 502 Bad Gateway\r\n"
+                err502+=b"Connection: close\r\n\r\n"
+                client_socket.sendall(err502)
             return
         if is_http:
             headers=parse_http_headers(first_payload)
@@ -644,13 +604,11 @@ def handler(client_socket,client_addr,ssh_port):
             except Exception:
                 pass
         stats.disconnect()
-
 def stats_reporter():
     while not shutdown_event.is_set():
         shutdown_event.wait(300)
         if not shutdown_event.is_set():
             logger.info(f"[STATS] {stats.summary()}")
-
 def server(listen_port,ssh_port):
     semaphore=threading.BoundedSemaphore(MAX_CONNECTIONS)
     server_socket=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
@@ -692,7 +650,6 @@ def server(listen_port,ssh_port):
     logger.info("Shutting down...")
     close_socket(server_socket)
     logger.info(f"Server stopped. {stats.summary()}")
-
 if __name__=="__main__":
     if len(sys.argv)<3:
         print("Usage: proxy_ws.py <Listen Port> <SSH Port>")
@@ -708,7 +665,6 @@ if __name__=="__main__":
         sys.exit(1)
     server(p_listen,p_ssh)
 WSEOF
-
       chmod 700 "$WS_SCRIPT"
       svc_provision "sshplus-ws" "SSHPlus WS Proxy v2.1" "/usr/bin/python3 $WS_SCRIPT $ws_port $csp" "" "LimitNOFILE=51200
 NoNewPrivileges=true"
