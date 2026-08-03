@@ -310,6 +310,7 @@ AMEOF
   fi
   sleep 1
 }
+
 # Why: รวมเครื่องมือเสริม
 function_ferramentas() {
   clear_screen
