@@ -1,72 +1,87 @@
-name: CI
+# ==================================================
+# CI/CD: build-and-test
+# Why: ตรวจสอบโค้ดอัตโนมัติทุก push/PR
+#      - ShellCheck: fail เฉพาะ error จริง (ไม่นับ info/warning ที่ตั้งใจใช้)
+#      - Build: สร้าง single-file dist/sshplus.sh
+#      - Smoke tests: ตรวจ syntax bash + python ที่ฝังใน heredoc
+# ==================================================
+
+name: build-and-test
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - "v*"
+    branches: [main]
   pull_request:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
+    branches: [main]
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
     steps:
+      # Why: ดึงโค้ดล่าสุด
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install tools
+      # Why: ให้แน่ใจว่ามี shellcheck (ubuntu-latest มีติดมาอยู่แล้ว กันพลาด)
+      - name: Ensure ShellCheck
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck bats
+          command -v shellcheck >/dev/null 2>&1 || {
+            sudo apt-get update -y
+            sudo apt-get install -y shellcheck
+          }
+          shellcheck --version
 
-      - name: Ensure scripts are executable
-        run: |
-          chmod +x bin/sshplus scripts/*.sh || true
-
+      # Why: ตรวจ bash syntax ทุกไฟล์
+      #      --severity=error = fail เฉพาะ error จริง (เช่น SC2148 ลืม shebang)
+      #      ข้าม info/warning (SC2015/SC2034/SC2155) ที่เป็น pattern ตั้งใจใช้
       - name: Run ShellCheck
         run: |
           find src scripts -name '*.sh' -print0 | \
-            xargs -0 shellcheck -x --severity=error
+            xargs -0 -r shellcheck -x --severity=error
+          if [[ -f install.sh ]]; then
+            shellcheck -x --severity=error install.sh
+          fi
 
+      # Why: สร้างไฟล์ single-file distribution
       - name: Build single-file distribution
         run: bash scripts/build.sh
 
+      # Why: smoke tests ยืนยันว่าไฟล์ที่ build ใช้ได้จริง
       - name: Run smoke tests
-        run: bats tests
+        run: |
+          echo "--- bash syntax ---"
+          bash -n dist/sshplus.sh
 
+          echo "--- required functions ---"
+          for fn in main show_menu \
+                    function_create_user function_delete_user function_renew_user \
+                    function_mode_connection function_firewall function_websocket \
+                    function_toggle_limit function_toggle_badvpn function_toggle_bot \
+                    function_auto_menu function_openvpn function_v2ray_manager \
+                    function_self_update function_uninstall; do
+            if grep -q "^${fn}()" dist/sshplus.sh; then
+              echo "OK: ${fn}"
+            else
+              echo "MISSING: ${fn}"
+              exit 1
+            fi
+          done
+
+          echo "--- embedded python syntax ---"
+          if command -v python3 >/dev/null 2>&1; then
+            awk '/cat <<.BOTPY./{f=1;next} /^BOTPY$/{f=0} f' dist/sshplus.sh > /tmp/bot_test.py
+            python3 -m py_compile /tmp/bot_test.py && echo "OK: bot_auto.py syntax"
+            awk '/cat <<.WSEOF./{f=1;next} /^WSEOF$/{f=0} f' dist/sshplus.sh > /tmp/ws_test.py
+            python3 -m py_compile /tmp/ws_test.py && echo "OK: proxy_ws.py syntax"
+          else
+            echo "SKIP: python3 not available"
+          fi
+
+      # Why: เก็บไฟล์ที่ build เป็น artifact ให้ดาวน์โหลดได้
       - name: Upload dist artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sshplus-dist
-          path: dist/
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build-and-test
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build distribution
-        run: bash scripts/build.sh
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/sshplus.sh
-            dist/sshplus.sh.sha256
+          name: sshplus
+          path: dist/sshplus.sh
+          retention-days: 7
