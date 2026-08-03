@@ -4,6 +4,7 @@
 #      จัดคอลัมน์ให้ตรงโดยคำนวณความกว้างไทยตอนรัน (ไม่พึ่งช่องว่างฝัง)
 # ==================================================
 
+# Why: ใช้สีจาก log.sh แต่ตั้งชื่อให้ตรงกับโค้ดเมนูเดิม
 MENU_RED="${SSHPLUS_RED:-}"
 MENU_GREEN="${SSHPLUS_GREEN:-}"
 MENU_YELLOW="${SSHPLUS_YELLOW:-}"
@@ -13,6 +14,7 @@ MENU_WHITE="${SSHPLUS_WHITE:-}"
 MENU_BG_RED="${SSHPLUS_BG_RED:-}"
 MENU_NC="${SSHPLUS_NC:-}"
 
+# Why: สถานะ service แบบ icon
 MENU_ON="${MENU_GREEN}●${MENU_NC}"
 MENU_OFF="${MENU_RED}○${MENU_NC}"
 MENU_ARROW="${MENU_CYAN}→${MENU_NC}"
@@ -22,6 +24,7 @@ MENU_WARN="${MENU_YELLOW}⚠${MENU_NC}"
 #      เว้นว่างไว้เพื่อให้ตรวจอัตโนมัติตอนรัน หรือบังคับค่าผ่าน env ได้
 MENU_COMBINE_WIDTH="${SSHPLUS_COMBINE_WIDTH:-}"
 
+# Why: wrapper ตรวจ service แบบปลอดภัย
 service_active() {
   local svc="${1:-}"
   if declare -F svc_is_active >/dev/null 2>&1; then
@@ -52,22 +55,19 @@ detect_combine_width() {
 }
 
 # Why: คำนวณความกว้างจริงของข้อความแบบ byte-based (ไม่ขึ้นกับ locale)
+#      อักษรไทย = 3 bytes ใน UTF-8, วรรณยุกต์/สระลอย = กว้าง 0 (หรือตาม Terminal)
 #      สูตร: width = bytes - 2*(จำนวนไทย) - สระลอย*(1 - MENU_COMBINE_WIDTH)
 text_width() {
   local work="$1"
   local total_bytes="${#work}"
   local cw="${MENU_COMBINE_WIDTH:-0}"
   local tmp thai_count=0 comb_count=0 seq
-  # นับไบต์ที่เป็นอักษรไทย (เริ่มด้วย 0xE0)
   tmp="${work//$'\xe0'/}"
   thai_count=$(( total_bytes - ${#tmp} ))
-  # ชุดสระ/วรรณยุกต์ที่ต่อท้ายอักษรไทย (3 bytes ต่อชุด)
-  for seq in $'\xe0\xb8\xb1' $'\xe0\xb8\xb4' $'\xe0\xb8\xb5' $'\xe0\xb8\xb6' $'\xe0\xb8\xb7' $'\xe0\xb8\xb8' $'\xe0\xb8\xb9' $'\xe0\xb9\x87' $'\xe0\xb9\x88' $'\xe0\xb9\x89' $'\xe0\xb9\x8a' $'\xe0\xb8\xad' $'\xe0\xb8\xae' $'\xe0\xb8\xb0' $'\xe0\xb8\xb2' $'\xe0\xb8\xb3' $'\xe0\xb8\xb9' $'\xe0\xb8\xbc' ; do
+  for seq in $'\xe0\xb8\xb1' $'\xe0\xb8\xb4' $'\xe0\xb8\xb5' $'\xe0\xb8\xb6' $'\xe0\xb8\xb7' $'\xe0\xb8\xb8' $'\xe0\xb8\xb9' $'\xe0\xb9\x87' $'\xe0\xb9\x88' $'\xe0\xb9\x89' $'\xe0\xb9\x8a' $'\xe0\xb9\x8b' $'\xe0\xb9\x8c' $'\xe0\xb9\x8d'; do
     tmp="${work//$seq/}"
     comb_count=$(( comb_count + ( ${#work} - ${#tmp} ) / 3 ))
   done
-  # คำนวณความกว้างจริง: ลบ 2 byte ต่ออักษรไทย (เพราะไทยเป็น 3 bytes แต่นับเป็น 1 คอลัมน์)
-  # และลบสระลอยตามค่า MENU_COMBINE_WIDTH (ถ้า Terminal แสดงสระลอยเป็น 1 คอลัมน์)
   echo $(( total_bytes - 2 * thai_count - comb_count * (1 - cw) ))
 }
 
@@ -81,18 +81,19 @@ pad_right() {
   printf '%s%*s' "$text" "$pad" ''
 }
 
+# Why: คำนวณ CPU usage จาก /proc/stat แบบ sample สั้นๆ
 get_cpu_usage() {
   if [[ ! -r /proc/stat ]]; then echo 0; return 0; fi
   local cpu1 cpu2
-  local _ u1 n1 s1 i1 w1 q1 sq1 st1
-  local _ u2 n2 s2 i2 w2 q2 sq2 st2
+  local _ u1 n1 s1 i1 w1 q1 sq1 st1 _
+  local _ u2 n2 s2 i2 w2 q2 sq2 st2 _
   cpu1="$(grep '^cpu ' /proc/stat 2>/dev/null || true)"
   if [[ -z "$cpu1" ]]; then echo 0; return 0; fi
-  read -r _ u1 n1 s1 i1 w1 q1 sq1 st1 <<< "$cpu1"
+  read -r _ u1 n1 s1 i1 w1 q1 sq1 st1 _ <<< "$cpu1"
   sleep 0.2 2>/dev/null || sleep 1
   cpu2="$(grep '^cpu ' /proc/stat 2>/dev/null || true)"
   if [[ -z "$cpu2" ]]; then echo 0; return 0; fi
-  read -r _ u2 n2 s2 i2 w2 q2 sq2 st2 <<< "$cpu2"
+  read -r _ u2 n2 s2 i2 w2 q2 sq2 st2 _ <<< "$cpu2"
   u1=${u1:-0}; n1=${n1:-0}; s1=${s1:-0}; i1=${i1:-0}
   w1=${w1:-0}; q1=${q1:-0}; sq1=${sq1:-0}; st1=${st1:-0}
   u2=${u2:-0}; n2=${n2:-0}; s2=${s2:-0}; i2=${i2:-0}
@@ -109,6 +110,7 @@ get_cpu_usage() {
   fi
 }
 
+# Why: รวบรวมข้อมูลระบบสำหรับแสดงบน header
 get_system_info() {
   full_os="Linux"; os_name="Linux"; ver_name=""; time_now=""
   ram_display="N/A"; ram_per=0; cpu_cores=1; cpu_use=0
@@ -167,8 +169,7 @@ check_service_status() {
   if service_active sshplus-ws; then stat_ws="$MENU_ON"; else stat_ws="$MENU_OFF"; fi
   if service_active openvpn; then stat_ovpn="$MENU_ON"; else stat_ovpn="$MENU_OFF"; fi
   if service_active xray; then stat_v2ray="$MENU_ON"; else stat_v2ray="$MENU_OFF"; fi
-  # Why: ตรวจทั้ง profile.d (แบบใหม่) และ .bashrc (แบบเก่าที่อาจค้างอยู่)
-  if [[ -f /etc/profile.d/zz-sshplus-automenu.sh ]] || grep -q "SSHPlus_AutoMenu_Marker" /root/.bashrc 2>/dev/null; then
+  if grep -q "SSHPlus_AutoMenu_Marker" /root/.bashrc 2>/dev/null; then
     stat_automenu="$MENU_ON"; else stat_automenu="$MENU_OFF"; fi
 }
 
@@ -180,6 +181,7 @@ print_row() {
   echo -e "  ${MENU_RED}[${MENU_CYAN}$1${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${left}${MENU_NC} ${MENU_RED}[${MENU_CYAN}$3${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${right}${MENU_NC} ${5:-}"
 }
 
+# Why: แสดงเมนูหลักพร้อมสถานะระบบแบบสคริปต์เดิม
 show_menu() {
   # Why: ตรวจความกว้างสระลอยของ Terminal นี้ครั้งเดียวต่อ session
   if [[ -z "${MENU_COMBINE_WIDTH:-}" ]]; then
@@ -188,14 +190,14 @@ show_menu() {
   get_system_info
   check_service_status
   if declare -F clear_screen >/dev/null 2>&1; then clear_screen; fi
-  local LINE="${MENU_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${MENU_NC}"
+  local LINE="${MENU_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${MENU_NC}"
   echo -e "${LINE}"
   echo -e "                     ${MENU_BG_RED}${MENU_WHITE}  ➱ SSHPLUS MANAGER PRO ➱  ${MENU_NC}"
   echo -e "${LINE}"
   printf "  ${MENU_CYAN}OS  :${MENU_WHITE} %-16s ${MENU_CYAN}TIME :${MENU_WHITE} %s${MENU_NC}\n" "${os_name:0:14}" "$time_now"
   printf "  ${MENU_CYAN}CPU :${MENU_WHITE} %-16s ${MENU_CYAN}RAM  :${MENU_WHITE} %s (%s%%)${MENU_NC}\n" "${cpu_cores} Core (${cpu_use}%)" "$ram_display" "$ram_per"
   echo -e "${LINE}"
-  echo -e "  ${MENU_GREEN}● ออนไลน์: ${MENU_WHITE}${onlines_count}${MENU_NC}    ${MENU_RED}● หมดอายุ: ${MENU_WHITE}${expired_count}${MENU_NC}    ${MENU_YELLOW}● ผู้ใช้งานทั้งหมด: ${MENU_WHITE}${total_users}${MENU_NC}"
+  echo -e "  ${MENU_GREEN}● ออนไลน์: ${MENU_WHITE}${onlines_count}${MENU_NC}    ${MENU_RED}● หมดอายุ: ${MENU_WHITE}${expired_count}${MENU_NC}    ${MENU_YELLOW}● ทั้งหมด: ${MENU_WHITE}${total_users}${MENU_NC}"
   echo -e "${LINE}"
   print_row "01" "สร้างผู้ใช้งาน" "15" "ดูทราฟฟิก (Traffic)" ""
   print_row "02" "สร้างไอดีทดสอบ" "16" "จัดการ Firewall" ""
