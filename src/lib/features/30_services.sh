@@ -277,22 +277,39 @@ BOTPY
   esac
 }
 
-# Why: สลับ auto menu เมื่อ root login
+# Why: เปิด/ปิด auto menu — เรียก SSHPlus อัตโนมัติเมื่อ login แบบ interactive
+#      ใช้ /etc/profile.d เพื่อให้มีผลกับทุก user (root และ user ที่มี sudo)
 function_auto_menu() {
   clear_screen
+  local profile="/etc/profile.d/zz-sshplus-automenu.sh"
   local bashrc="/root/.bashrc"
   local marker="# SSHPlus_AutoMenu_Marker"
-  [[ -f "$bashrc" ]] || touch "$bashrc"
-  if grep -q "$marker" "$bashrc"; then
-    sed -i "/$marker/d" "$bashrc"
+
+  # Why: ถ้าเปิดอยู่แล้ว → ปิด (ลบทั้ง profile.d และ hook เก่าใน .bashrc)
+  if [[ -f "$profile" ]] || grep -q "$marker" "$bashrc" 2>/dev/null; then
+    rm -f "$profile"
+    sed -i "/$marker/d" "$bashrc" 2>/dev/null || true
     log_info "ปิด Auto Menu แล้ว"
   else
-    echo "[[ \"\$-\" == *i* ]] && bash '${SCRIPT_PATH:-/usr/local/sbin/sshplus}' ${marker}" >> "$bashrc"
-    log_info "เปิด Auto Menu แล้ว!"
+    # Why: เขียน profile script ที่ตรวจว่า shell เป็น interactive + มี tty จริง
+    #      root → รันตรง, user อื่น → รันผ่าน sudo (ถ้ามี NOPASSWD sudo)
+    cat <<'AMEOF' > "$profile"
+# SSHPlus_AutoMenu_Marker
+if [ -n "$PS1" ] && [ -t 0 ] && [ -x /usr/local/sbin/sshplus ]; then
+  if [ "$(id -u)" = "0" ]; then
+    /usr/local/sbin/sshplus
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+    sudo /usr/local/sbin/sshplus
+  fi
+fi
+AMEOF
+    chmod 644 "$profile"
+    # Why: ลบ hook เก่าที่ค้างใน .bashrc กันเมนูเด้งซ้ำ 2 รอบ
+    sed -i "/$marker/d" "$bashrc" 2>/dev/null || true
+    log_info "เปิด Auto Menu แล้ว! (มีผลเมื่อ login ครั้งถัดไป)"
   fi
   sleep 1
 }
-
 # Why: รวมเครื่องมือเสริม
 function_ferramentas() {
   clear_screen
