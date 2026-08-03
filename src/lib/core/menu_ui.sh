@@ -1,10 +1,9 @@
 # ==================================================
 # Core: Original Menu UI
-# Why: แสดงเมนูหลักแบบ sshplusthai.sh เดิม
-#      จัดคอลัมน์ให้ตรงโดยคำนวณความกว้างจริงของข้อความไทย
+# Why: แสดงเมนูหลักแบบสคริปต์เดิม
+#      จัดคอลัมน์ให้ตรงโดยคำนวณความกว้างไทยตอนรัน (ไม่พึ่งช่องว่างฝัง)
 # ==================================================
 
-# Why: ใช้สีจาก log.sh แต่ตั้งชื่อให้ตรงกับโค้ดเมนูเดิม
 MENU_RED="${SSHPLUS_RED:-}"
 MENU_GREEN="${SSHPLUS_GREEN:-}"
 MENU_YELLOW="${SSHPLUS_YELLOW:-}"
@@ -14,13 +13,11 @@ MENU_WHITE="${SSHPLUS_WHITE:-}"
 MENU_BG_RED="${SSHPLUS_BG_RED:-}"
 MENU_NC="${SSHPLUS_NC:-}"
 
-# Why: สถานะ service แบบ icon
 MENU_ON="${MENU_GREEN}●${MENU_NC}"
 MENU_OFF="${MENU_RED}○${MENU_NC}"
 MENU_ARROW="${MENU_CYAN}→${MENU_NC}"
 MENU_WARN="${MENU_YELLOW}⚠${MENU_NC}"
 
-# Why: wrapper ตรวจ service แบบปลอดภัย
 service_active() {
   local svc="${1:-}"
   if declare -F svc_is_active >/dev/null 2>&1; then
@@ -30,12 +27,34 @@ service_active() {
   return 1
 }
 
-# Why: คำนวณ CPU usage จาก /proc/stat แบบ sample สั้นๆ
+# Why: คำนวณความกว้างจริงของข้อความแบบ byte-based (ไม่ขึ้นกับ locale)
+#      อักษรไทย = 3 bytes ใน UTF-8, วรรณยุกต์/สระลอย = กว้าง 0
+#      สูตร: width = bytes - 2*(จำนวนไทย) - (จำนวนสระลอย)
+text_width() {
+  local work="$1"
+  local total_bytes="${#work}"
+  local tmp thai_count=0 comb_count=0 seq
+  tmp="${work//$'\xe0'/}"
+  thai_count=$(( total_bytes - ${#tmp} ))
+  for seq in $'\xe0\xb8\xb1' $'\xe0\xb8\xb4' $'\xe0\xb8\xb5' $'\xe0\xb8\xb6' $'\xe0\xb8\xb7' $'\xe0\xb8\xb8' $'\xe0\xb8\xb9' $'\xe0\xb9\x87' $'\xe0\xb9\x88' $'\xe0\xb9\x89' $'\xe0\xb9\x8a' $'\xe0\xb9\x8b' $'\xe0\xb9\x8c' $'\xe0\xb9\x8d'; do
+    tmp="${work//$seq/}"
+    comb_count=$(( comb_count + ( ${#work} - ${#tmp} ) / 3 ))
+  done
+  echo $(( total_bytes - 2 * thai_count - comb_count ))
+}
+
+# Why: เติมช่องว่างให้ข้อความกว้างเท่าเป้าหมาย → คอลัมน์ตรงเสมอ
+pad_right() {
+  local text="$1" target="$2"
+  local width pad
+  width="$(text_width "$text")"
+  pad=$(( target - width ))
+  if (( pad < 0 )); then pad=0; fi
+  printf '%s%*s' "$text" "$pad" ''
+}
+
 get_cpu_usage() {
-  if [[ ! -r /proc/stat ]]; then
-    echo 0
-    return 0
-  fi
+  if [[ ! -r /proc/stat ]]; then echo 0; return 0; fi
   local cpu1 cpu2
   local _ u1 n1 s1 i1 w1 q1 sq1 st1 _
   local _ u2 n2 s2 i2 w2 q2 sq2 st2 _
@@ -62,20 +81,10 @@ get_cpu_usage() {
   fi
 }
 
-# Why: รวบรวมข้อมูลระบบสำหรับแสดงบน header
 get_system_info() {
-  full_os="Linux"
-  os_name="Linux"
-  ver_name=""
-  time_now=""
-  ram_display="N/A"
-  ram_per=0
-  cpu_cores=1
-  cpu_use=0
-  total_users=0
-  onlines_count=0
-  expired_count=0
-
+  full_os="Linux"; os_name="Linux"; ver_name=""; time_now=""
+  ram_display="N/A"; ram_per=0; cpu_cores=1; cpu_use=0
+  total_users=0; onlines_count=0; expired_count=0
   if [[ -f /etc/os-release ]]; then
     os_name="$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d'"' -f2 | awk '{print $1}')"
     ver_name="$(grep VERSION_ID /etc/os-release 2>/dev/null | cut -d'"' -f2)"
@@ -84,9 +93,7 @@ get_system_info() {
     full_os="$(uname -o 2>/dev/null || echo Linux)"
     os_name="$(uname -s 2>/dev/null || echo Linux)"
   fi
-
   time_now="$(date +%H:%M:%S 2>/dev/null || echo '')"
-
   local ram_total_mb ram_used_mb
   if command -v free >/dev/null 2>&1; then
     ram_total_mb="$(free -m 2>/dev/null | awk '/^Mem:/ {print $2}')"
@@ -100,25 +107,20 @@ get_system_info() {
     ram_used_mb=$(((ram_total_kb - ram_avail_kb) / 1024))
     ram_display="${ram_total_mb}M"
   fi
-
   if declare -F is_uint >/dev/null 2>&1; then
     if is_uint "${ram_total_mb:-}" && [[ "${ram_total_mb:-0}" -gt 0 ]]; then
       ram_per=$(( ${ram_used_mb:-0} * 100 / ram_total_mb ))
     fi
   fi
-
   cpu_cores="$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo 1)"
   cpu_use="$(get_cpu_usage)"
-
   local db_file="${SSHPLUS_DB_FILE:-/root/usuarios.db}"
   if [[ -f "$db_file" ]]; then
     total_users="$(grep -c . "$db_file" 2>/dev/null || true)"
   fi
   if [[ ! "${total_users:-}" =~ ^[0-9]+$ ]]; then total_users=0; fi
-
   onlines_count="$(ps -eo args 2>/dev/null | grep "sshd: " | grep -v "grep" | grep -v "priv" | grep -v "root" | wc -l | tr -d ' ' || true)"
   if [[ ! "${onlines_count:-}" =~ ^[0-9]+$ ]]; then onlines_count=0; fi
-
   local current_ts
   current_ts="$(date +%s 2>/dev/null || echo 0)"
   if [[ -f "$db_file" ]]; then
@@ -127,13 +129,9 @@ get_system_info() {
   if [[ ! "${expired_count:-}" =~ ^[0-9]+$ ]]; then expired_count=0; fi
 }
 
-# Why: ตรวจสอบสถานะ service สำหรับแสดง icon บนเมนู
 check_service_status() {
   if [[ -s /etc/issue.net ]] && grep -qE "^[[:space:]]*Banner[[:space:]]+" /etc/ssh/sshd_config 2>/dev/null; then
-    stat_banner="$MENU_ON"
-  else
-    stat_banner="$MENU_OFF"
-  fi
+    stat_banner="$MENU_ON"; else stat_banner="$MENU_OFF"; fi
   if service_active sshplus-limiter; then stat_limit="$MENU_ON"; else stat_limit="$MENU_OFF"; fi
   if service_active badvpn; then stat_badvpn="$MENU_ON"; else stat_badvpn="$MENU_OFF"; fi
   if service_active sshplus-bot; then stat_bot="$MENU_ON"; else stat_bot="$MENU_OFF"; fi
@@ -141,57 +139,45 @@ check_service_status() {
   if service_active openvpn; then stat_ovpn="$MENU_ON"; else stat_ovpn="$MENU_OFF"; fi
   if service_active xray; then stat_v2ray="$MENU_ON"; else stat_v2ray="$MENU_OFF"; fi
   if grep -q "SSHPlus_AutoMenu_Marker" /root/.bashrc 2>/dev/null; then
-    stat_automenu="$MENU_ON"
-  else
-    stat_automenu="$MENU_OFF"
-  fi
+    stat_automenu="$MENU_ON"; else stat_automenu="$MENU_OFF"; fi
 }
 
-# Why: พิมพ์เมนู 2 คอลัมน์
-#      กฎการจัดช่อง: วรรณยุกต์/สระไทย ( ั ิ ี ึ ื ุ ู ็ ่ ้ ๊ ๋ ์ )
-#      ไม่กินที่ใน terminal จึงต้องเติมช่องว่างชดเชยให้คอลัมน์ตรง
+# Why: พิมพ์ 2 คอลัมน์ โดยเติมช่องว่างอัตโนมัติ (ซ้ายกว้าง 16, ขวากว้าง 19)
 print_row() {
-  echo -e "  ${MENU_RED}[${MENU_CYAN}$1${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}$2 ${MENU_RED}[${MENU_CYAN}$3${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}$4 ${MENU_NC}${5:-}"
+  local left right
+  left="$(pad_right "$2" 16)"
+  right="$(pad_right "$4" 19)"
+  echo -e "  ${MENU_RED}[${MENU_CYAN}$1${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${left}${MENU_NC} ${MENU_RED}[${MENU_CYAN}$3${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${right}${MENU_NC} ${5:-}"
 }
 
-# Why: แสดงเมนูหลักพร้อมสถานะระบบแบบสคริปต์เดิม
 show_menu() {
   get_system_info
   check_service_status
-
-  if declare -F clear_screen >/dev/null 2>&1; then
-    clear_screen
-  fi
-
+  if declare -F clear_screen >/dev/null 2>&1; then clear_screen; fi
   local LINE="${MENU_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${MENU_NC}"
-
   echo -e "${LINE}"
   echo -e "                     ${MENU_BG_RED}${MENU_WHITE}  ➱ SSHPLUS MANAGER PRO ➱  ${MENU_NC}"
   echo -e "${LINE}"
-
   printf "  ${MENU_CYAN}OS  :${MENU_WHITE} %-16s ${MENU_CYAN}TIME :${MENU_WHITE} %s${MENU_NC}\n" "${os_name:0:14}" "$time_now"
   printf "  ${MENU_CYAN}CPU :${MENU_WHITE} %-16s ${MENU_CYAN}RAM  :${MENU_WHITE} %s (%s%%)${MENU_NC}\n" "${cpu_cores} Core (${cpu_use}%)" "$ram_display" "$ram_per"
-
   echo -e "${LINE}"
   echo -e "  ${MENU_GREEN}● ออนไลน์: ${MENU_WHITE}${onlines_count}${MENU_NC}    ${MENU_RED}● หมดอายุ: ${MENU_WHITE}${expired_count}${MENU_NC}    ${MENU_YELLOW}● ทั้งหมด: ${MENU_WHITE}${total_users}${MENU_NC}"
   echo -e "${LINE}"
-
-  print_row "01" "สร้างผู้ใช้งาน     " "15" "ดูทราฟฟิก (Traffic)  " ""
-  print_row "02" "สร้างไอดีทดสอบ    " "16" "จัดการ Firewall     " ""
-  print_row "03" "ลบผู้ใช้งาน       " "17" "ข้อมูลระบบ (Info)    " ""
-  print_row "04" "ต่ออายุผู้ใช้งาน    " "18" "ตั้งค่า Banner        " "$stat_banner"
-  print_row "05" "แสดงคนออนไลน์  " "19" "SSH Limiter        " "$stat_limit"
-  print_row "06" "แก้วันหมดอายุ      " "20" "BadVPN (Game)      " "$stat_badvpn"
-  print_row "07" "แก้ไขลิมิตจอ       " "21" "เมนูอัตโนมัติ         " "$stat_automenu"
-  print_row "08" "เปลี่ยนรหัสผ่าน      " "22" "บอท Telegram       " "$stat_bot"
-  print_row "09" "ลบคนหมดอายุ      " "23" "เครื่องมือ (Tools)   " "$MENU_ARROW"
-  print_row "10" "รายชื่อทั้งหมด      " "24" "WebSocket (Proxy)  " "$stat_ws"
-  print_row "11" "สำรองข้อมูล       " "25" "OpenVPN Manager    " "$stat_ovpn"
-  print_row "12" "จัดการพอร์ต       " "26" "System Optimizer   " "$MENU_ARROW"
-  print_row "13" "ทดสอบความเร็ว   " "27" "Xray (Reality)     " "$stat_v2ray"
-  print_row "14" "เคลียร์แรม/Cache   " "28" "อัปเดต (GitHub)     " ""
-  print_row "00" "ออกจากเมนู       " "29" "ถอนการติดตั้ง         " "$MENU_WARN"
-
+  print_row "01" "สร้างผู้ใช้งาน" "15" "ดูทราฟฟิก (Traffic)" ""
+  print_row "02" "สร้างไอดีทดสอบ" "16" "จัดการ Firewall" ""
+  print_row "03" "ลบผู้ใช้งาน" "17" "ข้อมูลระบบ (Info)" ""
+  print_row "04" "ต่ออายุผู้ใช้งาน" "18" "ตั้งค่า Banner" "$stat_banner"
+  print_row "05" "แสดงคนออนไลน์" "19" "SSH Limiter" "$stat_limit"
+  print_row "06" "แก้วันหมดอายุ" "20" "BadVPN (Game)" "$stat_badvpn"
+  print_row "07" "แก้ไขลิมิตจอ" "21" "เมนูอัตโนมัติ" "$stat_automenu"
+  print_row "08" "เปลี่ยนรหัสผ่าน" "22" "บอท Telegram" "$stat_bot"
+  print_row "09" "ลบคนหมดอายุ" "23" "เครื่องมือ (Tools)" "$MENU_ARROW"
+  print_row "10" "รายชื่อทั้งหมด" "24" "WebSocket (Proxy)" "$stat_ws"
+  print_row "11" "สำรองข้อมูล" "25" "OpenVPN Manager" "$stat_ovpn"
+  print_row "12" "จัดการพอร์ต" "26" "System Optimizer" "$MENU_ARROW"
+  print_row "13" "ทดสอบความเร็ว" "27" "Xray (Reality)" "$stat_v2ray"
+  print_row "14" "เคลียร์แรม/Cache" "28" "อัปเดต (GitHub)" ""
+  print_row "00" "ออกจากเมนู" "29" "ถอนการติดตั้ง" "$MENU_WARN"
   echo -e "${LINE}"
   printf " %sเลือกเมนู (Select Option): %s" "$MENU_GREEN" "$MENU_NC"
 }
