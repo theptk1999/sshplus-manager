@@ -3,13 +3,10 @@
 # Why: ฟังก์ชัน UI พื้นฐานสำหรับเมนู interactive
 # ==================================================
 
-# Why: หยุดรอผู้ใช้กด Enter เฉพาะเมื่อเป็น interactive shell
+# Why: reset สีก่อนหยุดรอ → ข้อความ "Press Enter" ไม่ติดพื้นสีค้าง
 pause() {
-  if [[ ! -t 0 ]]; then
-    return 0
-  fi
-
-  read -r -p "Press Enter to continue..."
+  printf '\033[0m'
+  read -r -p "Press Enter to continue..." _ || true
 }
 
 # Why: ล้างหน้าจอเฉพาะเมื่ออยู่บน terminal จริง
