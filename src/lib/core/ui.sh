@@ -13,8 +13,8 @@ pause() {
 }
 
 # Why: ล้างหน้าจอเฉพาะเมื่ออยู่บน terminal จริง
+# Why: reset สีทุกครั้งก่อนลบจอ → ป้องกันพื้นสีค้างทาทั้งหน้าจอ
 clear_screen() {
-  if [[ -t 1 ]]; then
-    clear
-  fi
+  printf '\033[0m'
+  clear 2>/dev/null || printf '\033[2J\033[H'
 }
