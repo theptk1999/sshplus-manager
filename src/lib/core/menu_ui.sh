@@ -4,7 +4,6 @@
 #      จัดคอลัมน์ให้ตรงโดยคำนวณความกว้างไทยตอนรัน (ไม่พึ่งช่องว่างฝัง)
 # ==================================================
 
-# Why: ใช้สีจาก log.sh แต่ตั้งชื่อให้ตรงกับโค้ดเมนูเดิม
 MENU_RED="${SSHPLUS_RED:-}"
 MENU_GREEN="${SSHPLUS_GREEN:-}"
 MENU_YELLOW="${SSHPLUS_YELLOW:-}"
@@ -14,7 +13,6 @@ MENU_WHITE="${SSHPLUS_WHITE:-}"
 MENU_BG_RED="${SSHPLUS_BG_RED:-}"
 MENU_NC="${SSHPLUS_NC:-}"
 
-# Why: สถานะ service แบบ icon
 MENU_ON="${MENU_GREEN}●${MENU_NC}"
 MENU_OFF="${MENU_RED}○${MENU_NC}"
 MENU_ARROW="${MENU_CYAN}→${MENU_NC}"
@@ -24,7 +22,6 @@ MENU_WARN="${MENU_YELLOW}⚠${MENU_NC}"
 #      เว้นว่างไว้เพื่อให้ตรวจอัตโนมัติตอนรัน หรือบังคับค่าผ่าน env ได้
 MENU_COMBINE_WIDTH="${SSHPLUS_COMBINE_WIDTH:-}"
 
-# Why: wrapper ตรวจ service แบบปลอดภัย
 service_active() {
   local svc="${1:-}"
   if declare -F svc_is_active >/dev/null 2>&1; then
@@ -55,7 +52,6 @@ detect_combine_width() {
 }
 
 # Why: คำนวณความกว้างจริงของข้อความแบบ byte-based (ไม่ขึ้นกับ locale)
-#      อักษรไทย = 3 bytes ใน UTF-8, วรรณยุกต์/สระลอย = กว้าง 0 (หรือตาม Terminal)
 #      สูตร: width = bytes - 2*(จำนวนไทย) - สระลอย*(1 - MENU_COMBINE_WIDTH)
 text_width() {
   local work="$1"
@@ -81,7 +77,6 @@ pad_right() {
   printf '%s%*s' "$text" "$pad" ''
 }
 
-# Why: คำนวณ CPU usage จาก /proc/stat แบบ sample สั้นๆ
 get_cpu_usage() {
   if [[ ! -r /proc/stat ]]; then echo 0; return 0; fi
   local cpu1 cpu2
@@ -110,7 +105,6 @@ get_cpu_usage() {
   fi
 }
 
-# Why: รวบรวมข้อมูลระบบสำหรับแสดงบน header
 get_system_info() {
   full_os="Linux"; os_name="Linux"; ver_name=""; time_now=""
   ram_display="N/A"; ram_per=0; cpu_cores=1; cpu_use=0
@@ -169,7 +163,7 @@ check_service_status() {
   if service_active sshplus-ws; then stat_ws="$MENU_ON"; else stat_ws="$MENU_OFF"; fi
   if service_active openvpn; then stat_ovpn="$MENU_ON"; else stat_ovpn="$MENU_OFF"; fi
   if service_active xray; then stat_v2ray="$MENU_ON"; else stat_v2ray="$MENU_OFF"; fi
-   # Why: ตรวจทั้ง profile.d (แบบใหม่) และ .bashrc (แบบเก่าที่อาจค้างอยู่)
+  # Why: ตรวจทั้ง profile.d (แบบใหม่) และ .bashrc (แบบเก่าที่อาจค้างอยู่)
   if [[ -f /etc/profile.d/zz-sshplus-automenu.sh ]] || grep -q "SSHPlus_AutoMenu_Marker" /root/.bashrc 2>/dev/null; then
     stat_automenu="$MENU_ON"; else stat_automenu="$MENU_OFF"; fi
 }
@@ -182,7 +176,6 @@ print_row() {
   echo -e "  ${MENU_RED}[${MENU_CYAN}$1${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${left}${MENU_NC} ${MENU_RED}[${MENU_CYAN}$3${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${right}${MENU_NC} ${5:-}"
 }
 
-# Why: แสดงเมนูหลักพร้อมสถานะระบบแบบสคริปต์เดิม
 show_menu() {
   # Why: ตรวจความกว้างสระลอยของ Terminal นี้ครั้งเดียวต่อ session
   if [[ -z "${MENU_COMBINE_WIDTH:-}" ]]; then
