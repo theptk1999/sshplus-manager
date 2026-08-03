@@ -4,6 +4,7 @@
 #      จัดคอลัมน์ให้ตรงโดยคำนวณความกว้างไทยตอนรัน (ไม่พึ่งช่องว่างฝัง)
 # ==================================================
 
+# Why: ใช้สีจาก log.sh แต่ตั้งชื่อให้ตรงกับโค้ดเมนูเดิม
 MENU_RED="${SSHPLUS_RED:-}"
 MENU_GREEN="${SSHPLUS_GREEN:-}"
 MENU_YELLOW="${SSHPLUS_YELLOW:-}"
@@ -13,11 +14,17 @@ MENU_WHITE="${SSHPLUS_WHITE:-}"
 MENU_BG_RED="${SSHPLUS_BG_RED:-}"
 MENU_NC="${SSHPLUS_NC:-}"
 
+# Why: สถานะ service แบบ icon
 MENU_ON="${MENU_GREEN}●${MENU_NC}"
 MENU_OFF="${MENU_RED}○${MENU_NC}"
 MENU_ARROW="${MENU_CYAN}→${MENU_NC}"
 MENU_WARN="${MENU_YELLOW}⚠${MENU_NC}"
 
+# Why: ความกว้างสระ/วรรณยุกต์ไทยขึ้นกับ Terminal (Termius=1, Termux/CMD=0)
+#      เว้นว่างไว้เพื่อให้ตรวจอัตโนมัติตอนรัน หรือบังคับค่าผ่าน env ได้
+MENU_COMBINE_WIDTH="${SSHPLUS_COMBINE_WIDTH:-}"
+
+# Why: wrapper ตรวจ service แบบปลอดภัย
 service_active() {
   local svc="${1:-}"
   if declare -F svc_is_active >/dev/null 2>&1; then
@@ -27,12 +34,33 @@ service_active() {
   return 1
 }
 
+# Why: ถาม Terminal ปัจจุบันว่าให้ความกว้างสระลอยไทยกี่ช่อง
+#      วิธี: วาด "กั" แล้วส่ง DSR (\033[6n) อ่านตำแหน่ง cursor กลับมา
+#      ถ้า cursor อยู่คอลัมน์ 3 ขึ้นไป = นับสระลอยเป็น 1 ช่อง (Termius)
+detect_combine_width() {
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    echo 0
+    return 0
+  fi
+  local resp="" col=""
+  printf '\rกั\033[6n' > /dev/tty 2>/dev/null
+  IFS= read -r -d 'R' -t 1 resp < /dev/tty 2>/dev/null || resp=""
+  printf '\r\033[2K' > /dev/tty 2>/dev/null
+  col="${resp##*;}"
+  if [[ "$col" =~ ^[0-9]+$ ]] && (( col >= 3 )); then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
 # Why: คำนวณความกว้างจริงของข้อความแบบ byte-based (ไม่ขึ้นกับ locale)
-#      อักษรไทย = 3 bytes ใน UTF-8, วรรณยุกต์/สระลอย = กว้าง 0
-#      สูตร: width = bytes - 2*(จำนวนไทย) - (จำนวนสระลอย)
+#      อักษรไทย = 3 bytes ใน UTF-8, วรรณยุกต์/สระลอย = กว้าง 0 (หรือตาม Terminal)
+#      สูตร: width = bytes - 2*(จำนวนไทย) - สระลอย*(1 - MENU_COMBINE_WIDTH)
 text_width() {
   local work="$1"
   local total_bytes="${#work}"
+  local cw="${MENU_COMBINE_WIDTH:-0}"
   local tmp thai_count=0 comb_count=0 seq
   tmp="${work//$'\xe0'/}"
   thai_count=$(( total_bytes - ${#tmp} ))
@@ -40,7 +68,7 @@ text_width() {
     tmp="${work//$seq/}"
     comb_count=$(( comb_count + ( ${#work} - ${#tmp} ) / 3 ))
   done
-  echo $(( total_bytes - 2 * thai_count - comb_count ))
+  echo $(( total_bytes - 2 * thai_count - comb_count * (1 - cw) ))
 }
 
 # Why: เติมช่องว่างให้ข้อความกว้างเท่าเป้าหมาย → คอลัมน์ตรงเสมอ
@@ -53,6 +81,7 @@ pad_right() {
   printf '%s%*s' "$text" "$pad" ''
 }
 
+# Why: คำนวณ CPU usage จาก /proc/stat แบบ sample สั้นๆ
 get_cpu_usage() {
   if [[ ! -r /proc/stat ]]; then echo 0; return 0; fi
   local cpu1 cpu2
@@ -81,6 +110,7 @@ get_cpu_usage() {
   fi
 }
 
+# Why: รวบรวมข้อมูลระบบสำหรับแสดงบน header
 get_system_info() {
   full_os="Linux"; os_name="Linux"; ver_name=""; time_now=""
   ram_display="N/A"; ram_per=0; cpu_cores=1; cpu_use=0
@@ -129,6 +159,7 @@ get_system_info() {
   if [[ ! "${expired_count:-}" =~ ^[0-9]+$ ]]; then expired_count=0; fi
 }
 
+# Why: ตรวจสอบสถานะ service สำหรับแสดง icon บนเมนู
 check_service_status() {
   if [[ -s /etc/issue.net ]] && grep -qE "^[[:space:]]*Banner[[:space:]]+" /etc/ssh/sshd_config 2>/dev/null; then
     stat_banner="$MENU_ON"; else stat_banner="$MENU_OFF"; fi
@@ -142,7 +173,7 @@ check_service_status() {
     stat_automenu="$MENU_ON"; else stat_automenu="$MENU_OFF"; fi
 }
 
-# Why: พิมพ์ 2 คอลัมน์ โดยเติมช่องว่างอัตโนมัติ (ซ้ายกว้าง 16, ขวากว้าง 19)
+# Why: พิมพ์เมนู 2 คอลัมน์ โดยเติมช่องว่างอัตโนมัติ (ซ้ายกว้าง 16, ขวากว้าง 19)
 print_row() {
   local left right
   left="$(pad_right "$2" 16)"
@@ -150,7 +181,12 @@ print_row() {
   echo -e "  ${MENU_RED}[${MENU_CYAN}$1${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${left}${MENU_NC} ${MENU_RED}[${MENU_CYAN}$3${MENU_RED}] ${MENU_WHITE}• ${MENU_YELLOW}${right}${MENU_NC} ${5:-}"
 }
 
+# Why: แสดงเมนูหลักพร้อมสถานะระบบแบบสคริปต์เดิม
 show_menu() {
+  # Why: ตรวจความกว้างสระลอยของ Terminal นี้ครั้งเดียวต่อ session
+  if [[ -z "${MENU_COMBINE_WIDTH:-}" ]]; then
+    MENU_COMBINE_WIDTH="$(detect_combine_width)"
+  fi
   get_system_info
   check_service_status
   if declare -F clear_screen >/dev/null 2>&1; then clear_screen; fi
