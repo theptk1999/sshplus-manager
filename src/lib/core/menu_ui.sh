@@ -169,7 +169,8 @@ check_service_status() {
   if service_active sshplus-ws; then stat_ws="$MENU_ON"; else stat_ws="$MENU_OFF"; fi
   if service_active openvpn; then stat_ovpn="$MENU_ON"; else stat_ovpn="$MENU_OFF"; fi
   if service_active xray; then stat_v2ray="$MENU_ON"; else stat_v2ray="$MENU_OFF"; fi
-  if grep -q "SSHPlus_AutoMenu_Marker" /root/.bashrc 2>/dev/null; then
+   # Why: ตรวจทั้ง profile.d (แบบใหม่) และ .bashrc (แบบเก่าที่อาจค้างอยู่)
+  if [[ -f /etc/profile.d/zz-sshplus-automenu.sh ]] || grep -q "SSHPlus_AutoMenu_Marker" /root/.bashrc 2>/dev/null; then
     stat_automenu="$MENU_ON"; else stat_automenu="$MENU_OFF"; fi
 }
 
