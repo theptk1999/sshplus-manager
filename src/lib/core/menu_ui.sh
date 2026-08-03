@@ -58,12 +58,16 @@ text_width() {
   local total_bytes="${#work}"
   local cw="${MENU_COMBINE_WIDTH:-0}"
   local tmp thai_count=0 comb_count=0 seq
+  # นับไบต์ที่เป็นอักษรไทย (เริ่มด้วย 0xE0)
   tmp="${work//$'\xe0'/}"
   thai_count=$(( total_bytes - ${#tmp} ))
-  for seq in $'\xe0\xb8\xb1' $'\xe0\xb8\xb4' $'\xe0\xb8\xb5' $'\xe0\xb8\xb6' $'\xe0\xb8\xb7' $'\xe0\xb8\xb8' $'\xe0\xb8\xb9' $'\xe0\xb9\x87' $'\xe0\xb9\x88' $'\xe0\xb9\x89' $'\xe0\xb9\x8a' $'\xe0\xb9\x8b' $'\xe0\xb9\x8c' $'\xe0\xb9\x8d'; do
+  # ชุดสระ/วรรณยุกต์ที่ต่อท้ายอักษรไทย (3 bytes ต่อชุด)
+  for seq in $'\xe0\xb8\xb1' $'\xe0\xb8\xb4' $'\xe0\xb8\xb5' $'\xe0\xb8\xb6' $'\xe0\xb8\xb7' $'\xe0\xb8\xb8' $'\xe0\xb8\xb9' $'\xe0\xb9\x87' $'\xe0\xb9\x88' $'\xe0\xb9\x89' $'\xe0\xb9\x8a' $'\xe0\xb8\xad' $'\xe0\xb8\xae' $'\xe0\xb8\xb0' $'\xe0\xb8\xb2' $'\xe0\xb8\xb3' $'\xe0\xb8\xb9' $'\xe0\xb8\xbc' ; do
     tmp="${work//$seq/}"
     comb_count=$(( comb_count + ( ${#work} - ${#tmp} ) / 3 ))
   done
+  # คำนวณความกว้างจริง: ลบ 2 byte ต่ออักษรไทย (เพราะไทยเป็น 3 bytes แต่นับเป็น 1 คอลัมน์)
+  # และลบสระลอยตามค่า MENU_COMBINE_WIDTH (ถ้า Terminal แสดงสระลอยเป็น 1 คอลัมน์)
   echo $(( total_bytes - 2 * thai_count - comb_count * (1 - cw) ))
 }
 
@@ -80,15 +84,15 @@ pad_right() {
 get_cpu_usage() {
   if [[ ! -r /proc/stat ]]; then echo 0; return 0; fi
   local cpu1 cpu2
-  local _ u1 n1 s1 i1 w1 q1 sq1 st1 _
-  local _ u2 n2 s2 i2 w2 q2 sq2 st2 _
+  local _ u1 n1 s1 i1 w1 q1 sq1 st1
+  local _ u2 n2 s2 i2 w2 q2 sq2 st2
   cpu1="$(grep '^cpu ' /proc/stat 2>/dev/null || true)"
   if [[ -z "$cpu1" ]]; then echo 0; return 0; fi
-  read -r _ u1 n1 s1 i1 w1 q1 sq1 st1 _ <<< "$cpu1"
+  read -r _ u1 n1 s1 i1 w1 q1 sq1 st1 <<< "$cpu1"
   sleep 0.2 2>/dev/null || sleep 1
   cpu2="$(grep '^cpu ' /proc/stat 2>/dev/null || true)"
   if [[ -z "$cpu2" ]]; then echo 0; return 0; fi
-  read -r _ u2 n2 s2 i2 w2 q2 sq2 st2 _ <<< "$cpu2"
+  read -r _ u2 n2 s2 i2 w2 q2 sq2 st2 <<< "$cpu2"
   u1=${u1:-0}; n1=${n1:-0}; s1=${s1:-0}; i1=${i1:-0}
   w1=${w1:-0}; q1=${q1:-0}; sq1=${sq1:-0}; st1=${st1:-0}
   u2=${u2:-0}; n2=${n2:-0}; s2=${s2:-0}; i2=${i2:-0}
@@ -184,14 +188,14 @@ show_menu() {
   get_system_info
   check_service_status
   if declare -F clear_screen >/dev/null 2>&1; then clear_screen; fi
-  local LINE="${MENU_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${MENU_NC}"
+  local LINE="${MENU_BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${MENU_NC}"
   echo -e "${LINE}"
   echo -e "                     ${MENU_BG_RED}${MENU_WHITE}  ➱ SSHPLUS MANAGER PRO ➱  ${MENU_NC}"
   echo -e "${LINE}"
   printf "  ${MENU_CYAN}OS  :${MENU_WHITE} %-16s ${MENU_CYAN}TIME :${MENU_WHITE} %s${MENU_NC}\n" "${os_name:0:14}" "$time_now"
   printf "  ${MENU_CYAN}CPU :${MENU_WHITE} %-16s ${MENU_CYAN}RAM  :${MENU_WHITE} %s (%s%%)${MENU_NC}\n" "${cpu_cores} Core (${cpu_use}%)" "$ram_display" "$ram_per"
   echo -e "${LINE}"
-  echo -e "  ${MENU_GREEN}● ออนไลน์: ${MENU_WHITE}${onlines_count}${MENU_NC}    ${MENU_RED}● หมดอายุ: ${MENU_WHITE}${expired_count}${MENU_NC}    ${MENU_YELLOW}● ทั้งหมด: ${MENU_WHITE}${total_users}${MENU_NC}"
+  echo -e "  ${MENU_GREEN}● ออนไลน์: ${MENU_WHITE}${onlines_count}${MENU_NC}    ${MENU_RED}● หมดอายุ: ${MENU_WHITE}${expired_count}${MENU_NC}    ${MENU_YELLOW}● ผู้ใช้งานทั้งหมด: ${MENU_WHITE}${total_users}${MENU_NC}"
   echo -e "${LINE}"
   print_row "01" "สร้างผู้ใช้งาน" "15" "ดูทราฟฟิก (Traffic)" ""
   print_row "02" "สร้างไอดีทดสอบ" "16" "จัดการ Firewall" ""
