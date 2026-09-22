@@ -144,32 +144,217 @@ function_delete_user() {
   pause
 }
 
+calculate_renewed_expiry_epoch() {
+  local old_expire="${1:-}"
+  local days="${2:-}"
+  local now="${3:-}"
+  local base_epoch=""
+  local base_utc=""
+  local new_expire=""
+
+  is_uint "$old_expire" || return 1
+  is_uint "$days" || return 1
+
+  [[ "$old_expire" -gt 0 ]] || return 1
+  [[ "$days" -gt 0 ]] || return 1
+
+  # Prevent absurdly large input from reaching shell/date arithmetic.
+  [[ "${#old_expire}" -le 18 ]] || return 1
+  [[ "${#days}" -le 7 ]] || return 1
+
+  if [[ -z "$now" ]]; then
+    now="$(date +%s)" || return 1
+  fi
+
+  is_uint "$now" || return 1
+  [[ "${#now}" -le 18 ]] || return 1
+
+  base_epoch="$now"
+
+  if [[ "$old_expire" -ge "$now" ]]; then
+    base_epoch="$old_expire"
+  fi
+
+  base_utc="$(
+    date -u \
+      -d "@$base_epoch" \
+      '+%Y-%m-%d %H:%M:%S UTC'
+  )" || return 1
+
+  new_expire="$(
+    date -u \
+      -d "$base_utc +${days} days" \
+      +%s
+  )" || return 1
+
+  is_uint "$new_expire" || return 1
+  [[ "$new_expire" -gt "$base_epoch" ]] || return 1
+
+  printf '%s
+' "$new_expire"
+}
+
 function_renew_user() {
   clear_screen
   function_list_users "inline"
-  read -r -p "ชื่อผู้ใช้ที่จะต่ออายุ (พิมพ์ 0 เพื่อยกเลิก): " username
-  [[ -z "$username" || "$username" == "0" ]] && return
-  local user_line
+
+  local username=""
+  local user_line=""
+  local db_user=""
+  local old_limit=""
+  local old_expire=""
+  local extra=""
+  local days=""
+  local now=""
+  local new_expire=""
+  local old_date_str=""
+  local final_date_str=""
+
+  read -r -p \
+    "ชื่อผู้ใช้ที่จะต่ออายุ (พิมพ์ 0 เพื่อยกเลิก): " \
+    username
+
+  [[ -z "$username" || "$username" == "0" ]] &&
+    return
+
   user_line="$(db_get_user_record "$username")"
-  if [[ -z "$user_line" ]]; then log_error "ไม่พบผู้ใช้นี้!"; pause; return; fi
-  local old_limit old_expire now
-  old_limit="$(echo "$user_line" | cut -d: -f2)"
-  old_expire="$(echo "$user_line" | cut -d: -f3)"
-  now="$(date +%s)"
-  read -r -p "จำนวนวันที่ต้องการเพิ่ม: " days
-  if ! is_uint "$days" || [[ "$days" -le 0 ]]; then log_error "ต้องเป็นตัวเลข > 0"; pause; return; fi
-  local new_expire
-  if is_uint "$old_expire" && [[ "$old_expire" -ge "$now" ]]; then
-    new_expire="$(date -d "@$old_expire + $days days" +%s)"
-  else
-    new_expire="$(date -d "+$days days" +%s)"
+
+  if [[ -z "$user_line" ]]; then
+    log_error "ไม่พบผู้ใช้นี้!"
+    pause
+    return
   fi
-  local final_date_str
-  final_date_str="$(date -d "@$new_expire" +%Y-%m-%d)"
-  chage -E "$final_date_str" "$username" >/dev/null 2>&1 || true
-  chage -M -1 "$username" >/dev/null 2>&1 || true
-  db_write_user_record "$username" "$old_limit" "$new_expire"
-  log_info "ต่ออายุสำเร็จ! Expire ใหม่: $(date -d "@$new_expire" +%d/%m/%Y)"
+
+  IFS=: read -r \
+    db_user \
+    old_limit \
+    old_expire \
+    extra <<< "$user_line"
+
+  if [[ "$db_user" != "$username" ||
+        -n "$extra" ||
+        ! "$old_limit" =~ ^[0-9]+$ ||
+        ! "$old_expire" =~ ^[0-9]+$ ||
+        "$old_limit" -le 0 ||
+        "$old_expire" -le 0 ]]; then
+
+    log_error "ข้อมูลผู้ใช้ในฐานข้อมูลไม่ถูกต้อง"
+    pause
+    return
+  fi
+
+  if ! id "$username" >/dev/null 2>&1; then
+    log_error "พบ record ใน DB แต่ไม่พบ Linux user"
+    pause
+    return
+  fi
+
+  read -r -p "จำนวนวันที่ต้องการเพิ่ม: " days
+
+  if ! is_uint "$days" ||
+     [[ "$days" -le 0 ]]; then
+
+    log_error "ต้องเป็นตัวเลข > 0"
+    pause
+    return
+  fi
+
+  now="$(date +%s)" || {
+    log_error "อ่านเวลาปัจจุบันไม่สำเร็จ"
+    pause
+    return
+  }
+
+  if ! new_expire="$(
+    calculate_renewed_expiry_epoch \
+      "$old_expire" \
+      "$days" \
+      "$now"
+  )"; then
+    log_error "คำนวณวันหมดอายุใหม่ไม่สำเร็จ"
+    pause
+    return
+  fi
+
+  old_date_str="$(
+    date -u \
+      -d "@$old_expire" \
+      +%Y-%m-%d
+  )" || {
+    log_error "แปลงวันหมดอายุเดิมไม่สำเร็จ"
+    pause
+    return
+  }
+
+  final_date_str="$(
+    date -u \
+      -d "@$new_expire" \
+      +%Y-%m-%d
+  )" || {
+    log_error "แปลงวันหมดอายุใหม่ไม่สำเร็จ"
+    pause
+    return
+  }
+
+  #
+  # DB is atomic. If Linux account update fails, restore the
+  # previous DB record before returning.
+  #
+  if ! db_write_user_record \
+       "$username" \
+       "$old_limit" \
+       "$new_expire"; then
+
+    log_error "บันทึกฐานข้อมูลไม่สำเร็จ"
+    pause
+    return
+  fi
+
+  if ! chage \
+       -E "$final_date_str" \
+       "$username" \
+       >/dev/null 2>&1; then
+
+    db_write_user_record \
+      "$username" \
+      "$old_limit" \
+      "$old_expire" >/dev/null 2>&1 || \
+        log_error "Rollback DB ไม่สำเร็จ"
+
+    log_error "ตั้งวันหมดอายุ Linux account ไม่สำเร็จ"
+    pause
+    return
+  fi
+
+  if ! chage \
+       -M -1 \
+       "$username" \
+       >/dev/null 2>&1; then
+
+    chage \
+      -E "$old_date_str" \
+      "$username" \
+      >/dev/null 2>&1 || \
+        log_error "Rollback account expiry ไม่สำเร็จ"
+
+    db_write_user_record \
+      "$username" \
+      "$old_limit" \
+      "$old_expire" >/dev/null 2>&1 || \
+        log_error "Rollback DB ไม่สำเร็จ"
+
+    log_error "ตั้งค่า password aging ไม่สำเร็จ"
+    pause
+    return
+  fi
+
+  log_info \
+    "ต่ออายุสำเร็จ! Expire ใหม่: $(
+      date -u \
+        -d "@$new_expire" \
+        +%d/%m/%Y
+    )"
+
   pause
 }
 

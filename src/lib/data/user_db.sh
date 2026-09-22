@@ -27,12 +27,13 @@ db_migrate_schema_if_needed() {
 }
 
 db_write_user_record() {
-  local username="${1:-}" limit="${2:-1}" expire_epoch="${3:-0}"
+  local username="${1:-}" limit="${2:-1}" expire_epoch="${3-}"
   local db="${DB_FILE:-/root/usuarios.db}"
   local lock="${DB_LOCK_FILE:-${db}.lock}"
   is_username "$username" || return 1
   [[ "$limit" =~ ^[0-9]+$ ]] || limit=1
-  [[ "$expire_epoch" =~ ^[0-9]+$ ]] || expire_epoch=0
+  [[ "$expire_epoch" =~ ^[0-9]+$ ]] || return 1
+  [[ "$expire_epoch" -gt 0 ]] || return 1
   local temp_file
   temp_file="$(mktemp "${db}.write.XXXXXX")" || return 1
   if ! ( flock -x 200 || exit 1

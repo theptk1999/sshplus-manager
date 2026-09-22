@@ -353,3 +353,97 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+@test "renew expiry calculation safely adds days to a future expiry" {
+  source src/lib/core/validation.sh
+  source src/lib/features/10_users.sh
+
+  local got=""
+
+  got="$(
+    calculate_renewed_expiry_epoch \
+      1790237421 \
+      3 \
+      1790000000
+  )"
+
+  echo "got=$got"
+
+  [ "$got" = "1790496621" ]
+}
+
+@test "renew expiry calculation starts from now when account is expired" {
+  source src/lib/core/validation.sh
+  source src/lib/features/10_users.sh
+
+  local got=""
+
+  got="$(
+    calculate_renewed_expiry_epoch \
+      1700000000 \
+      2 \
+      1790237421
+  )"
+
+  echo "got=$got"
+  echo "expected=1790410221"
+
+  [ "$got" = "1790410221" ]
+}
+
+@test "user DB rejects invalid expiry instead of coercing it to zero" {
+  source src/lib/core/validation.sh
+  source src/lib/data/user_db.sh
+
+  local tmp=""
+
+  tmp="$(mktemp -d)"
+
+  DB_FILE="$tmp/usuarios.db"
+  DB_LOCK_FILE="$tmp/usuarios.db.lock"
+
+  export DB_FILE
+  export DB_LOCK_FILE
+
+  ensure_db
+
+  if db_write_user_record testuser 1 ""; then
+    echo "invalid empty expiry was accepted"
+    rm -rf -- "$tmp"
+    return 1
+  fi
+
+  if grep -q '^testuser:' "$DB_FILE"; then
+    echo "invalid record was written"
+    rm -rf -- "$tmp"
+    return 1
+  fi
+
+  if db_write_user_record testuser 1 invalid; then
+    echo "invalid non-numeric expiry was accepted"
+    rm -rf -- "$tmp"
+    return 1
+  fi
+
+  if grep -q '^testuser:' "$DB_FILE"; then
+    echo "invalid record was written"
+    rm -rf -- "$tmp"
+    return 1
+  fi
+
+  rm -rf -- "$tmp"
+
+  echo "invalid expiry rejected"
+}
+
+@test "renew path does not contain ambiguous epoch date expression" {
+  if grep -Fq \
+    'date -d "@$old_expire + $days days"' \
+    src/lib/features/10_users.sh
+  then
+    echo "ambiguous GNU date expression still present"
+    return 1
+  fi
+
+  echo "ambiguous renew expression absent"
+}
