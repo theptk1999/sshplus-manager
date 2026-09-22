@@ -353,6 +353,22 @@ function_self_update() {
 
   log_info "ติดตั้ง binary จาก commit $remote_commit สำเร็จ"
 
+  log_info "กำลัง refresh generated runtime scripts..."
+
+  if ! "$target_bin" --refresh-runtime; then
+    if [[ -n "$backup_name" &&
+          -f "$backup_name" ]]; then
+      cp -p -- "$backup_name" "$target_bin" || true
+    fi
+
+    rm -rf -- "$staging"
+
+    log_error "Runtime refresh ไม่สำเร็จ"
+    log_error "Rollback SSHPlus binary เป็นเวอร์ชันก่อนหน้าแล้ว"
+    pause
+    return
+  fi
+
   dirty="$(
     git -C "$install_dir" \
       status --porcelain 2>/dev/null ||

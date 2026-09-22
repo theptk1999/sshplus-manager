@@ -27,7 +27,12 @@ function_create_user() {
   if [[ $? -ne 0 ]]; then log_error "สร้างผู้ใช้ไม่สำเร็จ"; pause; return; fi
   printf '%s:%s\n' "$username" "$password" | chpasswd
   if [[ $? -ne 0 ]]; then safe_userdel_local "$username" >/dev/null 2>&1 || true; log_error "ตั้งรหัสผ่านไม่สำเร็จ"; pause; return; fi
-  chage -M "$days" "$username" >/dev/null 2>&1 || true
+  if ! chage -M -1 "$username" >/dev/null 2>&1; then
+    safe_userdel_local "$username" >/dev/null 2>&1 || true
+    log_error "ตั้งค่า password aging ไม่สำเร็จ"
+    pause
+    return
+  fi
   local expire_epoch
   expire_epoch="$(date -d "$expire_date" +%s)"
   db_write_user_record "$username" "$limit" "$expire_epoch"
@@ -61,6 +66,12 @@ function_create_test() {
   expire_date="$(date -d "+1 days" +%Y-%m-%d)" || { log_error "คำนวณวันที่ไม่สำเร็จ"; pause; return; }
   useradd -M -s /bin/false -e "$expire_date" "$username" || { log_error "สร้างผู้ใช้ไม่สำเร็จ"; pause; return; }
   printf '%s:%s\n' "$username" "$password" | chpasswd || { safe_userdel_local "$username" >/dev/null 2>&1 || true; log_error "ตั้งรหัสผ่านไม่สำเร็จ"; pause; return; }
+  if ! chage -M -1 "$username" >/dev/null 2>&1; then
+    safe_userdel_local "$username" >/dev/null 2>&1 || true
+    log_error "ตั้งค่า password aging ไม่สำเร็จ"
+    pause
+    return
+  fi
   local expire_epoch
   expire_epoch="$(date -d "$expire_date" +%s)"
   db_write_user_record "$username" 1 "$expire_epoch"
@@ -156,6 +167,7 @@ function_renew_user() {
   local final_date_str
   final_date_str="$(date -d "@$new_expire" +%Y-%m-%d)"
   chage -E "$final_date_str" "$username" >/dev/null 2>&1 || true
+  chage -M -1 "$username" >/dev/null 2>&1 || true
   db_write_user_record "$username" "$old_limit" "$new_expire"
   log_info "ต่ออายุสำเร็จ! Expire ใหม่: $(date -d "@$new_expire" +%d/%m/%Y)"
   pause
@@ -195,6 +207,7 @@ function_change_expiry() {
   limit="$(echo "$user_line" | cut -d: -f2)"
   db_write_user_record "$username" "$limit" "$new_epoch"
   chage -E "$new_date" "$username" >/dev/null 2>&1 || true
+  chage -M -1 "$username" >/dev/null 2>&1 || true
   log_info "อัปเดตวันหมดอายุเป็น: $new_date"
   pause
 }
@@ -228,6 +241,7 @@ function_change_pass() {
   [[ -z "$newpass" ]] && { log_error "รหัสผ่านห้ามว่าง"; pause; return; }
   [[ "$newpass" != "$confirmpass" ]] && { log_error "ไม่ตรงกัน"; pause; return; }
   printf '%s:%s\n' "$username" "$newpass" | chpasswd || { log_error "เปลี่ยนรหัสผ่านไม่สำเร็จ"; pause; return; }
+  chage -M -1 "$username" >/dev/null 2>&1 || true
   log_info "เปลี่ยนรหัสผ่านสำเร็จ!"
   pause
 }

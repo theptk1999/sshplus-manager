@@ -7,6 +7,14 @@
 # Why: bootstrap เบาๆ แล้วเข้าเมนู
 main() {
   detect_os
+
+  # Internal non-interactive maintenance mode used by verified self-update.
+  if [[ "${1:-}" == "--refresh-runtime" ]]; then
+    require_root
+    refresh_runtime_scripts
+    return $?
+  fi
+
   log_info "OS detected: ${SSHPLUS_OS_ID:-unknown}"
 
   # Why: ถ้ารันด้วย root ให้เตรียม DB ไว้ล่วงหน้า

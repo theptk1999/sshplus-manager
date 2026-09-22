@@ -253,3 +253,103 @@ PYTEST
   run python3 tests/check_embedded.py
   [ "$status" -eq 0 ]
 }
+
+@test "managed SSH users do not have independent password expiry" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+users = Path(
+    "src/lib/features/10_users.sh"
+).read_text(encoding="utf-8")
+
+services = Path(
+    "src/lib/features/30_services.sh"
+).read_text(encoding="utf-8")
+
+if 'chage -M "$days"' in users:
+    raise SystemExit(
+        "legacy password max-age tied to account days remains"
+    )
+
+if users.count('chage -M -1 "$username"') < 4:
+    raise SystemExit(
+        "managed user password-aging normalization missing"
+    )
+
+if '["chage","-M","-1",u]' not in services:
+    raise SystemExit(
+        "Telegram-created users do not disable password expiry"
+    )
+
+print("managed user password aging verified")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "verified self-update refreshes generated runtime scripts" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+main = Path(
+    "src/main.sh"
+).read_text(encoding="utf-8")
+
+update = Path(
+    "src/lib/features/50_uninstall.sh"
+).read_text(encoding="utf-8")
+
+runtime = Path(
+    "src/lib/core/runtime_refresh.sh"
+).read_text(encoding="utf-8")
+
+checks = {
+    "internal refresh mode":
+        '--refresh-runtime' in main,
+    "self-update invokes new binary refresh":
+        '"$target_bin" --refresh-runtime' in update,
+    "limiter template refresh":
+        '"LIMEOF"' in runtime,
+    "bot template refresh":
+        '"BOTPY"' in runtime,
+    "websocket template refresh":
+        '"WSEOF"' in runtime,
+    "runtime rollback support":
+        "sshplus-prev" in runtime,
+}
+
+bad = [
+    name
+    for name, ok in checks.items()
+    if not ok
+]
+
+if bad:
+    raise SystemExit(
+        "missing: " + ", ".join(bad)
+    )
+
+print("self-update runtime refresh verified")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "runtime refresh never enables previously disabled services" {
+  run bash -c '
+    file="src/lib/core/runtime_refresh.sh"
+
+    grep -q \
+      "Restart only services that were already active" \
+      "$file"
+
+    if grep -nE \
+      "svc_(enable|start)[[:space:]]+(sshplus-limiter|sshplus-bot|sshplus-ws)" \
+      "$file"
+    then
+      exit 1
+    fi
+  '
+
+  [ "$status" -eq 0 ]
+}

@@ -394,6 +394,9 @@ def ca(a):
     if rc(["chpasswd"],i=f"{u}:{p}\n").returncode!=0:
         rc(["userdel","--force","--",u])
         return "❌ ตั้งรหัสไม่สำเร็จ"
+    if rc(["chage","-M","-1",u]).returncode!=0:
+        rc(["userdel","--force","--",u])
+        return "❌ ตั้งค่า password aging ไม่สำเร็จ"
     ex=int(time.time())+(di*86400)
     try:
         ups(u,li,ex)
