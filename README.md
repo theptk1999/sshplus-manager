@@ -102,18 +102,32 @@
 ### วิธีที่ 1: curl (แนะนำ)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/theptk1999/sshplus-manager/main/install.sh | sudo bash
+COMMIT="<40-char trusted commit SHA>"
+
+curl -fsSL \
+  "https://raw.githubusercontent.com/theptk1999/sshplus-manager/${COMMIT}/install.sh" \
+  | sudo env SSHPLUS_REF="$COMMIT" bash
 ```
 
 ### วิธีที่ 2: git clone
 
 ```bash
 sudo apt update && sudo apt install -y git
+COMMIT="<40-char trusted commit SHA>"
+
 git clone https://github.com/theptk1999/sshplus-manager.git /opt/sshplus-manager
 cd /opt/sshplus-manager
-sudo bash scripts/build.sh
-sudo cp dist/sshplus.sh /usr/local/sbin/sshplus
-sudo chmod +x /usr/local/sbin/sshplus
+
+git fetch origin main
+git checkout --detach "$COMMIT"
+
+bash scripts/build.sh
+
+cd dist
+sha256sum -c sshplus.sh.sha256
+cd ..
+
+sudo install -m 755 dist/sshplus.sh /usr/local/sbin/sshplus
 ```
 
 ### วิธีที่ 3: ดาวน์โหลดไฟล์เดียว
@@ -177,16 +191,30 @@ sudo /usr/local/sbin/sshplus
 ### วิธีที่ 2: curl
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/theptk1999/sshplus-manager/main/install.sh | sudo bash
+COMMIT="<40-char trusted commit SHA>"
+
+curl -fsSL \
+  "https://raw.githubusercontent.com/theptk1999/sshplus-manager/${COMMIT}/install.sh" \
+  | sudo env SSHPLUS_REF="$COMMIT" bash
 ```
 
-### วิธีที่ 3: git pull
+### วิธีที่ 3: อัปเดตด้วย commit ที่ระบุ
 
 ```bash
 cd /opt/sshplus-manager
-git pull
+
+git fetch origin main
+
+COMMIT="$(git rev-parse origin/main)"
+echo "Candidate commit: $COMMIT"
+git log -1 --oneline "$COMMIT"
+
+git checkout --detach "$COMMIT"
 bash scripts/build.sh
-cp dist/sshplus.sh /usr/local/sbin/sshplus
+
+cd dist
+sha256sum -c sshplus.sh.sha256
+sudo install -m 755 sshplus.sh /usr/local/sbin/sshplus
 ```
 
 ---

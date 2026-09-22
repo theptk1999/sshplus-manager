@@ -26,7 +26,7 @@ function_create_user() {
   useradd -M -s /bin/false -e "$expire_date" "$username"
   if [[ $? -ne 0 ]]; then log_error "สร้างผู้ใช้ไม่สำเร็จ"; pause; return; fi
   printf '%s:%s\n' "$username" "$password" | chpasswd
-  if [[ $? -ne 0 ]]; then userdel --force "$username" >/dev/null 2>&1 || true; log_error "ตั้งรหัสผ่านไม่สำเร็จ"; pause; return; fi
+  if [[ $? -ne 0 ]]; then safe_userdel_local "$username" >/dev/null 2>&1 || true; log_error "ตั้งรหัสผ่านไม่สำเร็จ"; pause; return; fi
   chage -M "$days" "$username" >/dev/null 2>&1 || true
   local expire_epoch
   expire_epoch="$(date -d "$expire_date" +%s)"
@@ -60,7 +60,7 @@ function_create_test() {
   local expire_date
   expire_date="$(date -d "+1 days" +%Y-%m-%d)" || { log_error "คำนวณวันที่ไม่สำเร็จ"; pause; return; }
   useradd -M -s /bin/false -e "$expire_date" "$username" || { log_error "สร้างผู้ใช้ไม่สำเร็จ"; pause; return; }
-  printf '%s:%s\n' "$username" "$password" | chpasswd || { userdel --force "$username" >/dev/null 2>&1; log_error "ตั้งรหัสผ่านไม่สำเร็จ"; pause; return; }
+  printf '%s:%s\n' "$username" "$password" | chpasswd || { safe_userdel_local "$username" >/dev/null 2>&1 || true; log_error "ตั้งรหัสผ่านไม่สำเร็จ"; pause; return; }
   local expire_epoch
   expire_epoch="$(date -d "$expire_date" +%s)"
   db_write_user_record "$username" 1 "$expire_epoch"
@@ -69,18 +69,67 @@ function_create_test() {
 }
 
 function_delete_user() {
+  local username=""
+  local user_line=""
+  local confirm_delete=""
+  local delete_rc=0
+
   clear_screen
   function_list_users "inline"
+
   read -r -p "ชื่อผู้ใช้ที่จะลบ (พิมพ์ 0 เพื่อยกเลิก): " username
+
   [[ -z "$username" || "$username" == "0" ]] && return
-  local user_line
+
+  if ! is_username "$username"; then
+    log_error "ชื่อผู้ใช้ไม่ผ่าน safety check"
+    pause
+    return
+  fi
+
   user_line="$(db_get_user_record "$username")"
-  if [[ -z "$user_line" ]]; then log_error "ไม่พบผู้ใช้นี้!"; pause; return; fi
+
+  if [[ -z "$user_line" ]]; then
+    log_error "ไม่พบผู้ใช้นี้ในฐานข้อมูล SSHPlus"
+    pause
+    return
+  fi
+
   read -r -p "ยืนยันลบ $username ? (YES/NO): " confirm_delete
-  [[ "$confirm_delete" != "YES" ]] && { log_warn "ยกเลิก"; pause; return; }
-  id "$username" >/dev/null 2>&1 && userdel --force "$username" >/dev/null 2>&1 || true
-  db_delete_user_record "$username"
-  log_info "ลบ $username เรียบร้อย!"
+
+  if [[ "$confirm_delete" != "YES" ]]; then
+    log_warn "ยกเลิก"
+    pause
+    return
+  fi
+
+  db_delete_managed_user "$username"
+  delete_rc=$?
+
+  case "$delete_rc" in
+    0)
+      log_info "ลบ $username เรียบร้อย!"
+      ;;
+    2)
+      log_error "ชื่อผู้ใช้ไม่ผ่าน safety check"
+      ;;
+    3)
+      log_error "ไม่พบ $username ในฐานข้อมูล SSHPlus"
+      ;;
+    4)
+      log_error "ปฏิเสธการลบ system/protected account"
+      ;;
+    5)
+      log_error "userdel ไม่สำเร็จ ฐานข้อมูลยังคงถูกเก็บไว้"
+      ;;
+    6)
+      log_error "ลบ Linux user แล้ว แต่ cleanup DB ไม่สำเร็จ"
+      ;;
+    *)
+      log_error "ลบผู้ใช้ไม่สำเร็จ (code: $delete_rc)"
+      ;;
+  esac
+
   pause
 }
 
@@ -217,7 +266,8 @@ function_backup_users() {
     read -r -p "เลือก: " b_opt
     case "$b_opt" in
       1)
-        local backup_name="backup_users_$(date +%Y%m%d_%H%M%S).db"
+        local backup_name=""
+        backup_name="backup_users_$(date +%Y%m%d_%H%M%S).db"
         if ( flock -s 200 || exit 1; cp "${DB_FILE:-/root/usuarios.db}" "/root/$backup_name"; chmod 600 "/root/$backup_name" ) 200>"${DB_LOCK_FILE:-/root/usuarios.db.lock}"; then
           log_info "Backup: /root/$backup_name"
         else log_error "Backup ไม่สำเร็จ"; fi

@@ -1,38 +1,64 @@
 #!/usr/bin/env bats
 
-# Why: ตรวจสอบว่า entrypoint มี syntax ถูกต้อง
+setup() {
+  cd "$BATS_TEST_DIRNAME/.."
+}
+
 @test "bin/sshplus has valid bash syntax" {
   run bash -n bin/sshplus
   [ "$status" -eq 0 ]
 }
 
-# Why: ตรวจสอบว่า build script รันผ่าน
+@test "all active source shell files have valid syntax" {
+  run bash -c '
+    set -e
+    find src -type f -name "*.sh" ! -name "*.bak" -print0 |
+    while IFS= read -r -d "" f; do
+      bash -n "$f"
+    done
+    bash -n install.sh
+  '
+
+  [ "$status" -eq 0 ]
+}
+
 @test "build script completes" {
   run bash scripts/build.sh
   [ "$status" -eq 0 ]
 }
 
-# Why: ตรวจสอบว่าไฟล์ dist ถูกสร้างจริง
-@test "dist file exists after build" {
+@test "distribution and checksum are created" {
   run bash scripts/build.sh
   [ "$status" -eq 0 ]
-  [ -f dist/sshplus.sh ]
+
+  [ -s dist/sshplus.sh ]
+  [ -s dist/sshplus.sh.sha256 ]
 }
 
-# Why: ตรวจสอบ syntax ของไฟล์ distribution
-@test "dist file has valid bash syntax" {
+@test "distribution has valid bash syntax" {
   run bash scripts/build.sh
   [ "$status" -eq 0 ]
+
   run bash -n dist/sshplus.sh
   [ "$status" -eq 0 ]
 }
 
-# Why: ตรวจสอบว่า dist รันในโหมด non-interactive ได้
-@test "dist file runs in non-interactive mode" {
+@test "distribution checksum validates" {
   run bash scripts/build.sh
   [ "$status" -eq 0 ]
 
-  run bash dist/sshplus.sh
+  run bash -c '
+    cd dist
+    sha256sum -c sshplus.sh.sha256
+  '
+
   [ "$status" -eq 0 ]
-  [[ "$output" == *"SSHPlus Manager - Modular Scaffold"* ]]
+}
+
+@test "distribution exits cleanly without interactive stdin" {
+  run bash scripts/build.sh
+  [ "$status" -eq 0 ]
+
+  run timeout 10 bash dist/sshplus.sh </dev/null
+  [ "$status" -eq 0 ]
 }

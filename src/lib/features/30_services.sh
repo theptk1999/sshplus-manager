@@ -13,35 +13,191 @@ function_toggle_limit() {
     sleep 1
     return
   fi
+
   log_info "กำลังสร้าง SSH Limiter..."
+
   cat <<'LIMEOF' > "$LIMIT_SCRIPT"
 #!/bin/bash
+
 DB_FILE="/root/usuarios.db"
-trap 'exit 0' SIGTERM
+CHECK_INTERVAL=4
+TERM_GRACE=1
+
+trap 'exit 0' SIGTERM SIGINT
+
+log_msg() {
+  printf '%s [sshplus-limiter] %s\n' \
+    "$(date '+%Y-%m-%d %H:%M:%S')" \
+    "$*"
+}
+
+valid_username() {
+  local user="${1:-}"
+
+  [[ "$user" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,31}$ ]] &&
+    [[ "$user" != "root" ]]
+}
+
+session_matches_user() {
+  local pid="${1:-}"
+  local user="${2:-}"
+  local expected_uid=""
+  local process_uid=""
+  local process_args=""
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  valid_username "$user" || return 1
+
+  expected_uid="$(id -u "$user" 2>/dev/null)" || return 1
+
+  process_uid="$(
+    ps -o uid= -p "$pid" 2>/dev/null |
+      tr -d '[:space:]'
+  )"
+
+  [[ "$process_uid" =~ ^[0-9]+$ ]] || return 1
+  [[ "$process_uid" == "$expected_uid" ]] || return 1
+
+  process_args="$(ps -o args= -p "$pid" 2>/dev/null)" ||
+    return 1
+
+  case "$process_args" in
+    "sshd: ${user}"|"sshd: ${user}@"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+collect_sessions() {
+  local user="${1:-}"
+
+  valid_username "$user" || return 1
+
+  ps -u "$user" \
+    -o pid=,etimes=,args= \
+    2>/dev/null |
+  awk -v u="$user" '
+    $1 ~ /^[0-9]+$/ &&
+    $2 ~ /^[0-9]+$/ &&
+    $3 == "sshd:" &&
+    ($4 == u || index($4, u "@") == 1) {
+      print $1, $2
+    }
+  ' |
+  sort -k2,2nr -k1,1n
+}
+
+enforce_user_limit() {
+  local user="${1:-}"
+  local limit="${2:-}"
+  local count=0
+  local excess=0
+  local index=0
+  local entry=""
+  local pid=""
+  local etimes=""
+
+  local -a sessions=()
+  local -a victims=()
+
+  valid_username "$user" || return 0
+  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || return 0
+
+  id "$user" >/dev/null 2>&1 || return 0
+
+  mapfile -t sessions < <(
+    collect_sessions "$user"
+  )
+
+  count="${#sessions[@]}"
+
+  (( count > limit )) || return 0
+
+  excess=$((count - limit))
+
+  log_msg \
+    "user=$user sessions=$count limit=$limit excess=$excess"
+
+  # collect_sessions sorts oldest -> newest.
+  # Keep indexes 0 .. limit-1 and terminate only newer excess sessions.
+  for ((index=limit; index<count; index++)); do
+    entry="${sessions[$index]}"
+    pid="${entry%% *}"
+    etimes="${entry#* }"
+
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    [[ "$etimes" =~ ^[0-9]+$ ]] || continue
+
+    if ! session_matches_user "$pid" "$user"; then
+      continue
+    fi
+
+    if kill -TERM "$pid" 2>/dev/null; then
+      victims+=("$pid")
+
+      log_msg \
+        "TERM user=$user pid=$pid age=${etimes}s"
+    fi
+  done
+
+  ((${#victims[@]} > 0)) || return 0
+
+  sleep "$TERM_GRACE"
+
+  for pid in "${victims[@]}"; do
+    if session_matches_user "$pid" "$user"; then
+      kill -KILL "$pid" 2>/dev/null || true
+
+      log_msg \
+        "KILL user=$user pid=$pid"
+    fi
+  done
+}
+
 while true; do
-  if [[ -f "$DB_FILE" ]]; then
-    while IFS=: read -r user limit expire_epoch || [[ -n "${user:-}" ]]; do
-      [[ -z "${user:-}" || -z "${limit:-}" ]] && continue
-      [[ "$user" == "root" ]] && continue
-      [[ "$limit" =~ ^[0-9]+$ ]] || continue
-      count="$(pgrep -u "$user" -f "sshd:" 2>/dev/null | wc -l)"
-      if [[ "$count" -gt "$limit" ]]; then
-        pkill -TERM -u "$user" -f "sshd:" 2>/dev/null || true
-        sleep 1
-        pkill -KILL -u "$user" -f "sshd:" 2>/dev/null || true
-      fi
+  if [[ -r "$DB_FILE" ]]; then
+    while IFS=: read -r user limit expire_epoch extra ||
+          [[ -n "${user:-}" ]]; do
+
+      [[ -z "${user:-}" ]] && continue
+      [[ -n "${extra:-}" ]] && continue
+
+      valid_username "$user" || continue
+
+      [[ "$limit" =~ ^[1-9][0-9]*$ ]] || continue
+
+      enforce_user_limit "$user" "$limit"
+
     done < "$DB_FILE"
   fi
-  sleep 4
+
+  sleep "$CHECK_INTERVAL"
 done
 LIMEOF
+
   chmod 700 "$LIMIT_SCRIPT"
-  svc_provision "sshplus-limiter" "SSHPlus Limiter" "/bin/bash $LIMIT_SCRIPT" "" "LimitNOFILE=51200
+
+  svc_provision \
+    "sshplus-limiter" \
+    "SSHPlus Limiter" \
+    "/bin/bash $LIMIT_SCRIPT" \
+    "" \
+    "LimitNOFILE=51200
 NoNewPrivileges=true"
+
   svc_daemon_reload
   svc_enable sshplus-limiter
   svc_start sshplus-limiter
-  svc_is_active sshplus-limiter && log_info "เปิด SSH Limiter แล้ว!" || log_error "เริ่ม Limiter ไม่สำเร็จ"
+
+  if svc_is_active sshplus-limiter; then
+    log_info "เปิด SSH Limiter แล้ว!"
+  else
+    log_error "เริ่ม Limiter ไม่สำเร็จ"
+  fi
+
   sleep 1
 }
 
@@ -55,8 +211,8 @@ function_toggle_badvpn() {
     log_warn "หยุด BadVPN แล้ว"
   else
     if [[ ! -s "$BADVPN_BIN" ]]; then
-      download_with_user_confirmation "BadVPN (primary)" "$URL_BADVPN" "$BADVPN_BIN" "755" || \
-      download_with_user_confirmation "BadVPN (backup)" "$URL_BADVPN_BACKUP" "$BADVPN_BIN" "755" || \
+      download_verified_file "BadVPN (primary)" "$URL_BADVPN" "$BADVPN_PRIMARY_SHA256" "$BADVPN_BIN" "755" || \
+      download_verified_file "BadVPN (backup)" "$URL_BADVPN_BACKUP" "$BADVPN_BACKUP_SHA256" "$BADVPN_BIN" "755" || \
       { log_error "ดาวน์โหลด BadVPN ไม่สำเร็จ"; rm -f "$BADVPN_BIN"; pause; return; }
     fi
     [[ -x "$BADVPN_BIN" ]] || { log_error "BadVPN ไม่พร้อม"; pause; return; }
@@ -117,11 +273,9 @@ AI=os.environ.get("ADMIN_ID","").strip()
 if not TK or not AI:
     sys.exit(1)
 logging.basicConfig(filename=LOG,level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
-try:
-    import requests
-except ImportError:
-    subprocess.run([sys.executable,"-m","pip","install","requests","--break-system-packages"],check=False,capture_output=True)
-    import requests
+import json
+import urllib.parse
+import urllib.request
 def rc(a,i=None):
     return subprocess.run(a,input=i,text=True,capture_output=True,check=False)
 def ue(u):
@@ -152,23 +306,80 @@ def dele(u):
         ls=[l for l in ls if not l.startswith(f"{u}:")]
         wl(ls)
         fcntl.flock(lf,fcntl.LOCK_UN)
+def api_call(method,data=None,params=None,timeout=10):
+    url=f"https://api.telegram.org/bot{TK}/{method}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    body=None
+    if data is not None:
+        body=urllib.parse.urlencode(data).encode("utf-8")
+    req=urllib.request.Request(url,data=body)
+    with urllib.request.urlopen(req,timeout=timeout) as resp:
+        raw=resp.read()
+    return json.loads(raw.decode("utf-8"))
+
 def sm(t,cid=None):
     try:
-        requests.post(f"https://api.telegram.org/bot{TK}/sendMessage",data={"chat_id":cid or AI,"text":t,"parse_mode":"HTML"},timeout=10)
+        api_call(
+            "sendMessage",
+            data={
+                "chat_id":cid or AI,
+                "text":t,
+                "parse_mode":"HTML"
+            },
+            timeout=10
+        )
     except Exception as e:
         logging.error(e)
+
 def gu(o):
     try:
-        r=requests.get(f"https://api.telegram.org/bot{TK}/getUpdates",params={"offset":o,"timeout":30},timeout=35)
-        return r.json()
-    except Exception:
+        return api_call(
+            "getUpdates",
+            params={
+                "offset":o,
+                "timeout":30
+            },
+            timeout=35
+        )
+    except Exception as e:
+        logging.error(e)
         time.sleep(5)
         return None
+
+def uid_min():
+    try:
+        with open(
+            "/etc/login.defs",
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as f:
+            for line in f:
+                line=line.split("#",1)[0].strip()
+
+                if not line:
+                    continue
+
+                p=line.split()
+
+                if (
+                    len(p)>=2
+                    and p[0]=="UID_MIN"
+                    and p[1].isdigit()
+                ):
+                    return int(p[1])
+
+    except Exception:
+        pass
+
+    return 1000
+
 def ca(a):
     if len(a)<4:
         return "รูปแบบ: /add user pass days limit"
     u,p,d,l=a[0],a[1],a[2],a[3]
-    if not re.match(r"^[a-zA-Z0-9_-]+$",u) or u=="root":
+    if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_-]{0,31}",u) or u=="root":
         return "❌ ชื่อไม่ถูกต้อง"
     if not d.isdigit() or int(d)<=0:
         return "❌ วันต้อง > 0"
@@ -181,24 +392,79 @@ def ca(a):
     if rc(["useradd","-M","-s","/bin/false","-e",ed,u]).returncode!=0:
         return "❌ สร้างไม่สำเร็จ"
     if rc(["chpasswd"],i=f"{u}:{p}\n").returncode!=0:
-        rc(["userdel","--force",u])
+        rc(["userdel","--force","--",u])
         return "❌ ตั้งรหัสไม่สำเร็จ"
     ex=int(time.time())+(di*86400)
     try:
         ups(u,li,ex)
     except Exception as e:
-        rc(["userdel","--force",u])
+        rc(["userdel","--force","--",u])
         return f"❌ DB error: {html.escape(str(e))}"
     eh=datetime.datetime.fromtimestamp(ex).strftime("%d/%m/%Y")
     return f"✅ <b>{html.escape(u)}</b>\nรหัส: {html.escape(p)}\nวัน: {di}\nจอ: {li}\nหมดอายุ: {eh}"
 def cd(a):
     if len(a)<1:
-        return "รูปแบบ: /del user"
+        return "รูปแบบ: /del user YES"
+
     u=a[0]
-    if not ue(u):
-        return f"❌ ไม่พบ: {html.escape(u)}"
-    rc(["userdel","--force",u])
-    dele(u)
+
+    # ป้องกัน option injection เช่น -rf / --help
+    # และจำกัดความยาวให้อยู่ในช่วงที่เหมาะกับ Linux username
+    if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_-]{0,31}",u):
+        return "❌ ชื่อผู้ใช้ไม่ถูกต้อง"
+
+    # root ห้ามแตะเด็ดขาด
+    if u=="root":
+        return "⛔ ไม่อนุญาตให้ลบ root"
+
+    # Telegram ต้องยืนยันคำสั่ง destructive อย่างชัดเจน
+    if len(a)!=2 or a[1]!="YES":
+        return f"⚠️ ยืนยันการลบด้วย:\n<code>/del {html.escape(u)} YES</code>"
+
+    # ลบได้เฉพาะบัญชีที่ SSHPlus เป็นผู้จัดการ
+    managed=False
+    try:
+        for line in rl():
+            p=line.split(":")
+            if p and p[0]==u:
+                managed=True
+                break
+    except Exception as e:
+        return f"❌ อ่านฐานข้อมูลไม่ได้: {html.escape(str(e))}"
+
+    if not managed:
+        return "⛔ ปฏิเสธ: user นี้ไม่ได้อยู่ในฐานข้อมูล SSHPlus"
+
+    # ถ้า Linux user ยังอยู่ ตรวจ UID ก่อนสั่ง userdel
+    if ue(u):
+        uid_result=rc(["id","-u",u])
+
+        if uid_result.returncode!=0:
+            return "❌ ตรวจสอบ UID ไม่สำเร็จ"
+
+        try:
+            uid=int(uid_result.stdout.strip())
+        except Exception:
+            return "❌ UID ไม่ถูกต้อง"
+
+        # บัญชี SSHPlus ที่สร้างด้วย useradd ปกติควรเป็น UID >= 1000
+        # 65534 มักใช้กับ nobody/nogroup
+        minimum_uid=uid_min()
+
+        if uid<minimum_uid or uid in (0,65534):
+            return f"⛔ ปฏิเสธการลบ system account (UID {uid})"
+
+        result=rc(["userdel","--force","--",u])
+
+        if result.returncode!=0:
+            return f"❌ userdel ไม่สำเร็จ: {html.escape(u)}"
+
+    # กรณี Linux user หายไปแล้ว ยัง cleanup record ใน SSHPlus DB ได้
+    try:
+        dele(u)
+    except Exception as e:
+        return f"❌ ลบจากฐานข้อมูลไม่สำเร็จ: {html.escape(str(e))}"
+
     return f"🗑 ลบ {html.escape(u)} แล้ว"
 def cl():
     try:
@@ -222,7 +488,7 @@ def cl():
         return f"❌ {html.escape(str(e))}"
 def main():
     logging.info("Bot started")
-    sm("🤖 บอทเริ่มทำงาน!\n/add ชื่อ รหัส วัน จอ\n/del ชื่อ\n/list")
+    sm("🤖 บอทเริ่มทำงาน!\n/add ชื่อ รหัส วัน จอ\n/del ชื่อ YES\n/list")
     o=0
     while True:
         u=gu(o)

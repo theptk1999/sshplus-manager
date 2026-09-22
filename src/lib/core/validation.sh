@@ -12,7 +12,57 @@ is_port() {
 }
 
 is_username() {
-  [[ "${1:-}" =~ ^[a-zA-Z0-9_-]{1,32}$ ]] && [[ "${1:-}" != "root" ]]
+  local username="${1:-}"
+  [[ "$username" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]{0,31}$ ]] &&
+    [[ "$username" != "root" ]]
+}
+
+get_uid_min() {
+  local uid_min=""
+
+  if [[ -r /etc/login.defs ]]; then
+    uid_min="$(
+      awk '
+        /^[[:space:]]*#/ { next }
+        $1 == "UID_MIN" && $2 ~ /^[0-9]+$/ {
+          print $2
+          exit
+        }
+      ' /etc/login.defs 2>/dev/null
+    )"
+  fi
+
+  [[ "$uid_min" =~ ^[0-9]+$ ]] || uid_min=1000
+  printf '%s\n' "$uid_min"
+}
+
+is_safe_deletable_local_user() {
+  local username="${1:-}"
+  local uid=""
+  local uid_min=""
+
+  is_username "$username" || return 1
+
+  id "$username" >/dev/null 2>&1 || return 1
+
+  uid="$(id -u "$username" 2>/dev/null)" || return 1
+  [[ "$uid" =~ ^[0-9]+$ ]] || return 1
+
+  uid_min="$(get_uid_min)"
+  [[ "$uid_min" =~ ^[0-9]+$ ]] || uid_min=1000
+
+  (( uid >= uid_min )) || return 1
+  (( uid != 0 )) || return 1
+  (( uid != 65534 )) || return 1
+
+  return 0
+}
+
+safe_userdel_local() {
+  local username="${1:-}"
+
+  is_safe_deletable_local_user "$username" || return 1
+  userdel --force -- "$username"
 }
 
 is_date() {

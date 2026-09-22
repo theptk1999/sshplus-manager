@@ -1,65 +1,92 @@
 # ==================================================
 # CI/CD: build-and-test
-# Why: ตรวจสอบโค้ดอัตโนมัติทุก push/PR
-#      - ShellCheck: fail เฉพาะ error จริง (ไม่นับ info/warning ที่ตั้งใจใช้)
-#      - Build: สร้าง single-file dist/sshplus.sh
-#      - Smoke tests: ตรวจ syntax bash + python ที่ฝังใน heredoc
+# Why:
+#   - ShellCheck standalone scripts
+#   - Build integrated single-file distribution
+#   - ShellCheck integrated distribution
+#   - Smoke/security Bats tests
+#   - Verify embedded Python and required functions
+#   - Publish immutable build artifacts
 # ==================================================
 
 name: build-and-test
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+    tags:
+      - "v*"
   pull_request:
-    branches: [main]
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
 
     steps:
-      # Why: ดึงโค้ดล่าสุด
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      # Why: ให้แน่ใจว่ามี shellcheck (ubuntu-latest มีติดมาอยู่แล้ว กันพลาด)
-      - name: Ensure ShellCheck
+      - name: Install test tools
         run: |
-          command -v shellcheck >/dev/null 2>&1 || {
-            sudo apt-get update -y
-            sudo apt-get install -y shellcheck
-          }
+          sudo apt-get update
+          sudo apt-get install -y shellcheck bats
           shellcheck --version
+          bats --version
+          python3 --version
 
-      # Why: ตรวจ bash syntax ทุกไฟล์
-      #      --severity=error = fail เฉพาะ error จริง (เช่น SC2148 ลืม shebang)
-      #      ข้าม info/warning (SC2015/SC2034/SC2155) ที่เป็น pattern ตั้งใจใช้
-      - name: Run ShellCheck
+      - name: Ensure scripts are executable
         run: |
-          find src scripts -name '*.sh' -print0 | \
-            xargs -0 -r shellcheck -x --severity=error
-          if [[ -f install.sh ]]; then
-            shellcheck -x --severity=error install.sh
-          fi
+          chmod +x bin/sshplus scripts/*.sh || true
 
-      # Why: สร้างไฟล์ single-file distribution
+      - name: ShellCheck standalone scripts
+        run: |
+          shellcheck --severity=warning -e SC2034 -x \
+            install.sh \
+            bin/sshplus \
+            scripts/*.sh
+
       - name: Build single-file distribution
         run: bash scripts/build.sh
 
-      # Why: smoke tests ยืนยันว่าไฟล์ที่ build ใช้ได้จริง
-      - name: Run smoke tests
+      - name: ShellCheck integrated distribution
         run: |
-          echo "--- bash syntax ---"
-          bash -n dist/sshplus.sh
+          shellcheck --severity=warning -e SC2034 -x dist/sshplus.sh
 
-          echo "--- required functions ---"
-          for fn in main show_menu \
-                    function_create_user function_delete_user function_renew_user \
-                    function_mode_connection function_firewall function_websocket \
-                    function_toggle_limit function_toggle_badvpn function_toggle_bot \
-                    function_auto_menu function_openvpn function_v2ray_manager \
-                    function_self_update function_uninstall; do
+      - name: Verify distribution checksum
+        run: |
+          cd dist
+          sha256sum -c sshplus.sh.sha256
+
+      - name: Verify required functions
+        run: |
+          for fn in \
+            main \
+            show_menu \
+            function_create_user \
+            function_delete_user \
+            function_renew_user \
+            function_mode_connection \
+            function_firewall \
+            function_websocket \
+            function_toggle_limit \
+            function_toggle_badvpn \
+            function_toggle_bot \
+            function_auto_menu \
+            function_openvpn \
+            function_v2ray_manager \
+            function_self_update \
+            function_uninstall
+          do
             if grep -q "^${fn}()" dist/sshplus.sh; then
               echo "OK: ${fn}"
             else
@@ -68,20 +95,44 @@ jobs:
             fi
           done
 
-          echo "--- embedded python syntax ---"
-          if command -v python3 >/dev/null 2>&1; then
-            awk '/cat <<.BOTPY./{f=1;next} /^BOTPY$/{f=0} f' dist/sshplus.sh > /tmp/bot_test.py
-            python3 -m py_compile /tmp/bot_test.py && echo "OK: bot_auto.py syntax"
-            awk '/cat <<.WSEOF./{f=1;next} /^WSEOF$/{f=0} f' dist/sshplus.sh > /tmp/ws_test.py
-            python3 -m py_compile /tmp/ws_test.py && echo "OK: proxy_ws.py syntax"
-          else
-            echo "SKIP: python3 not available"
-          fi
+      - name: Verify embedded programs
+        run: |
+          python3 tests/check_embedded.py
 
-      # Why: เก็บไฟล์ที่ build เป็น artifact ให้ดาวน์โหลดได้
+      - name: Run Bats test suite
+        run: |
+          bats tests
+
       - name: Upload dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sshplus
-          path: dist/sshplus.sh
+          name: sshplus-dist
+          path: dist/
           retention-days: 7
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-test
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Build distribution
+        run: bash scripts/build.sh
+
+      - name: Verify release checksum
+        run: |
+          cd dist
+          sha256sum -c sshplus.sh.sha256
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@fe965f7af51af5f2602596916f38a38df2e33de0 # v3.0.2
+        with:
+          files: |
+            dist/sshplus.sh
+            dist/sshplus.sh.sha256

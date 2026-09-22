@@ -196,89 +196,12 @@ function_firewall() {
   done
 }
 
-function_websocket() {
-  clear_screen
-  local status_ws; svc_is_active sshplus-ws && status_ws="${GREEN}ONLINE${NC}" || status_ws="${RED}OFFLINE${NC}"
-  echo -e "สถานะ WebSocket: $status_ws"
-  echo "1) เปิด  2) ปิด  3) Log  0) กลับ"
-  read -r -p "เลือก: " ws_opt
-  case "$ws_opt" in
-    1)
-      svc_is_active sshplus-ws && { log_warn "ทำงานอยู่แล้ว"; pause; return; }
-      read -r -p "Listen Port (80): " ws_port; [[ -z "$ws_port" ]] && ws_port=80
-      is_port "$ws_port" || { log_error "Port ผิด"; pause; return; }
-      is_port_in_use "$ws_port" && { log_error "Port ถูกใช้แล้ว"; pause; return; }
-      local csp; csp="$(get_ssh_port)"
-      cat <<'PYEOF' > "$WS_SCRIPT"
-#!/usr/bin/env python3
-import socket,threading,select,sys,logging
-logging.basicConfig(level=logging.INFO,format="%(asctime)s %(levelname)s %(message)s")
-BIND="0.0.0.0";SSH="127.0.0.1";BUF=4096;TMO=300;MAXC=1000
-sem=threading.BoundedSemaphore(MAXC)
-def close(s):
- try:s.shutdown(socket.SHUT_RDWR)
- except:pass
- finally:
-  try:s.close()
-  except:pass
-def handler(cs,ca,sp):
- if not sem.acquire(blocking=False):close(cs);return
- ts=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
- try:
-  ts.settimeout(10);ts.connect((SSH,sp));ts.settimeout(None)
-  cs.settimeout(10);fp=cs.recv(BUF);cs.settimeout(None)
-  if not fp:return
-  rh=fp.decode("utf-8",errors="ignore")
-  if rh.startswith("GET") or rh.startswith("CONNECT") or "HTTP/1." in rh:
-   cs.sendall(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
-  else:ts.sendall(fp)
-  while True:
-   r,_,_=select.select([cs,ts],[],[],TMO)
-   if not r:break
-   if cs in r:
-    d=cs.recv(BUF)
-    if not d:break
-    ts.sendall(d)
-   if ts in r:
-    d=ts.recv(BUF)
-    if not d:break
-    cs.sendall(d)
- except Exception as e:logging.debug(f"{ca}: {e}")
- finally:close(cs);close(ts);sem.release()
-def server(lp,sp):
- s=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
- s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
- s.bind((BIND,lp));s.listen(1024)
- logging.info(f"WS {lp} -> SSH {sp}")
- while True:
-  try:
-   c,a=s.accept()
-   threading.Thread(target=handler,args=(c,a,sp),daemon=True).start()
-  except KeyboardInterrupt:break
-  except Exception as e:logging.error(e)
-if __name__=="__main__":
- if len(sys.argv)<3:sys.exit(1)
- server(int(sys.argv[1]),int(sys.argv[2]))
-PYEOF
-      chmod 700 "$WS_SCRIPT"
-      svc_provision "sshplus-ws" "SSHPlus WS Proxy" "/usr/bin/python3 $WS_SCRIPT $ws_port $csp" "" "LimitNOFILE=51200
-NoNewPrivileges=true"
-      svc_daemon_reload; svc_enable sshplus-ws; svc_start sshplus-ws
-      svc_is_active sshplus-ws && log_info "WS เริ่มแล้ว ($ws_port -> SSH:$csp)" || log_error "เริ่ม WS ไม่สำเร็จ"
-      command -v ufw >/dev/null 2>&1 && ufw allow "$ws_port" >/dev/null 2>&1 || true
-      pause ;;
-    2) svc_is_active sshplus-ws && { svc_stop sshplus-ws; svc_disable sshplus-ws; svc_remove sshplus-ws; log_warn "หยุด WS แล้ว"; } || log_warn "WS ไม่ได้ทำงาน"; sleep 1 ;;
-    3) svc_logs sshplus-ws 80; pause ;;
-    0) return ;; *) sleep 1 ;;
-  esac
-}
-
 function_openvpn() {
   clear_screen
   echo -e "${BLUE}│${BG_RED}      OPENVPN MANAGER (AUTO)      ${NC}${BLUE}│${NC}"
   if [[ ! -s "$OPENVPN_SCRIPT" ]]; then
     log_warn "กำลังดาวน์โหลด OpenVPN installer..."
-    download_with_user_confirmation "OpenVPN Installer" "$URL_OPENVPN" "$OPENVPN_SCRIPT" "700" || { log_error "Download ไม่สำเร็จ"; pause; return; }
+    download_verified_file "OpenVPN Installer" "$URL_OPENVPN" "$OPENVPN_SHA256" "$OPENVPN_SCRIPT" "700" || { log_error "Download ไม่สำเร็จ"; pause; return; }
   fi
   if [[ -e /etc/openvpn/server/server.conf || -e /etc/openvpn/server.conf ]]; then
     log_info "ตรวจพบ OpenVPN แล้ว!"
@@ -302,7 +225,7 @@ function_v2ray_manager() {
       1)
         if [[ ! -f /usr/local/bin/xray ]]; then
           local xi; xi="$(mktemp "${TMP_BASE:-/tmp}/xray-inst.XXXXXX.sh")"
-          download_with_user_confirmation "Xray Installer" "$URL_XRAY_INSTALL" "$xi" "700" || { rm -f "$xi"; pause; continue; }
+          download_verified_file "Xray Installer" "$URL_XRAY_INSTALL" "$XRAY_INSTALL_SHA256" "$xi" "700" || { rm -f "$xi"; pause; continue; }
           bash "$xi" install; rm -f "$xi"
         fi
         [[ -f /usr/local/bin/xray ]] || { log_error "ติดตั้ง Xray ไม่สำเร็จ"; pause; continue; }
