@@ -432,9 +432,14 @@ function_change_pass() {
 }
 
 function_remove_expired() {
+  clear_screen
   log_info "กำลังตรวจสอบบัญชีที่หมดอายุ..."
-  db_remove_expired
-  sleep 1
+
+  if ! db_remove_expired; then
+    log_error "ตรวจสอบ/ลบบัญชีหมดอายุไม่สำเร็จ"
+  fi
+
+  pause
 }
 
 function_list_users() {

@@ -447,3 +447,58 @@ PYTEST
 
   echo "ambiguous renew expression absent"
 }
+
+@test "expired-user cleanup menu waits for acknowledgement" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+import re
+
+text = Path(
+    "src/lib/features/10_users.sh"
+).read_text(encoding="utf-8")
+
+m = re.search(
+    r"^function_remove_expired\(\) \{\n"
+    r"(.*?)"
+    r"^\}",
+    text,
+    re.MULTILINE | re.DOTALL,
+)
+
+if not m:
+    raise SystemExit(
+        "function_remove_expired not found"
+    )
+
+body = m.group(1)
+
+checks = {
+    "clears screen":
+        "clear_screen" in body,
+    "runs cleanup":
+        "db_remove_expired" in body,
+    "checks cleanup failure":
+        "if ! db_remove_expired" in body,
+    "waits for Enter":
+        re.search(r"^\s*pause\s*$", body, re.MULTILINE)
+        is not None,
+    "old one-second delay removed":
+        "sleep 1" not in body,
+}
+
+failed = [
+    name
+    for name, ok in checks.items()
+    if not ok
+]
+
+if failed:
+    raise SystemExit(
+        "failed: " + ", ".join(failed)
+    )
+
+print("expired-user cleanup UX verified")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
