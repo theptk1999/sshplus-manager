@@ -2,56 +2,102 @@
 # Feature: Network / Ports / Proxy / VPN (REAL)
 # ==================================================
 
-ensure_port_service_installed() {
+require_port_service_ready() {
   local target="${1:-}"
+
   case "$target" in
     ssh)
-      command -v sshd >/dev/null 2>&1 || [[ -f /etc/ssh/sshd_config ]] && return 0
-      log_warn "กำลังติดตั้ง OpenSSH Server..."
-      install_pkg "openssh-server" || return 1
-      svc_enable ssh || svc_enable sshd || true
-      svc_start ssh || svc_start sshd || true
-      ;;
-    dropbear)
-      command -v dropbear >/dev/null 2>&1 && return 0
-      [[ -f /etc/default/dropbear || -f /etc/sysconfig/dropbear ]] && return 0
-      install_pkg "dropbear" || return 1
-      local cfg=""
-      if [[ -f /etc/default/dropbear ]]; then cfg="/etc/default/dropbear"
-      elif [[ -f /etc/sysconfig/dropbear ]]; then cfg="/etc/sysconfig/dropbear"
-      else
-        cfg="/etc/default/dropbear"
-        mkdir -p /etc/default
-        printf 'DROPBEAR_PORT=222\nDROPBEAR_EXTRA_ARGS=\n' > "$cfg"
+      if ! command -v sshd >/dev/null 2>&1 &&
+         [[ ! -x /usr/sbin/sshd ]]; then
+        log_error "ยังไม่ได้ติดตั้ง OpenSSH Server"
+        return 1
       fi
-      svc_enable dropbear || true; svc_start dropbear || true
+
+      [[ -f /etc/ssh/sshd_config ]] || {
+        log_error "ไม่พบ /etc/ssh/sshd_config"
+        return 1
+      }
+
+      if ! svc_is_active ssh &&
+         ! svc_is_active sshd &&
+         ! svc_is_active ssh.socket; then
+        log_error "SSH ไม่ได้ทำงานอยู่"
+        log_warn "เมนูเปลี่ยนพอร์ตจะไม่ start service อัตโนมัติ"
+        return 1
+      fi
       ;;
+
+    dropbear)
+      command -v dropbear >/dev/null 2>&1 || {
+        log_error "ยังไม่ได้ติดตั้ง Dropbear"
+        return 1
+      }
+
+      if [[ ! -f /etc/default/dropbear &&
+            ! -f /etc/sysconfig/dropbear ]]; then
+        log_error "ไม่พบ config Dropbear"
+        return 1
+      fi
+
+      if ! svc_is_active dropbear; then
+        log_error "Dropbear ไม่ได้ทำงานอยู่"
+        log_warn "เมนูเปลี่ยนพอร์ตจะไม่ start service อัตโนมัติ"
+        return 1
+      fi
+      ;;
+
     stunnel)
-      command -v stunnel >/dev/null 2>&1 || command -v stunnel4 >/dev/null 2>&1 && return 0
-      [[ -f /etc/stunnel/stunnel.conf ]] && return 0
-      local pkg="stunnel"
-      [[ "${OS:-}" == "ubuntu" || "${OS:-}" == "debian" ]] && pkg="stunnel4"
-      install_pkg "$pkg" || return 1
-      mkdir -p /etc/stunnel
-      [[ -f /etc/stunnel/stunnel.conf ]] || cat <<STUNEOF > /etc/stunnel/stunnel.conf
-foreground = no
-[ssh]
-client = no
-accept = 443
-connect = 127.0.0.1:$(get_ssh_port)
-STUNEOF
-      svc_enable stunnel4 || svc_enable stunnel || true
-      svc_start stunnel4 || svc_start stunnel || true
+      if ! command -v stunnel >/dev/null 2>&1 &&
+         ! command -v stunnel4 >/dev/null 2>&1; then
+        log_error "ยังไม่ได้ติดตั้ง Stunnel"
+        return 1
+      fi
+
+      [[ -f /etc/stunnel/stunnel.conf ]] || {
+        log_error \
+          "Stunnel ติดตั้งแล้วแต่ยังไม่ได้ตั้งค่า /etc/stunnel/stunnel.conf"
+        log_warn \
+          "เมนูเปลี่ยนพอร์ตจะไม่สร้าง config หรือ start service อัตโนมัติ"
+        return 1
+      }
+
+      if ! svc_is_active stunnel4 &&
+         ! svc_is_active stunnel; then
+        log_error "Stunnel ไม่ได้ทำงานอยู่"
+        log_warn "เมนูเปลี่ยนพอร์ตจะไม่ start service อัตโนมัติ"
+        return 1
+      fi
       ;;
+
     squid)
-      command -v squid >/dev/null 2>&1 && return 0
-      [[ -f /etc/squid/squid.conf || -f /etc/squid3/squid.conf ]] && return 0
-      install_pkg "squid" || return 1
-      svc_enable squid || svc_enable squid3 || true
-      svc_start squid || svc_start squid3 || true
+      command -v squid >/dev/null 2>&1 || {
+        log_error "ยังไม่ได้ติดตั้ง Squid"
+        log_warn \
+          "เมนูเปลี่ยนพอร์ตจะไม่ติดตั้ง package อัตโนมัติ"
+        return 1
+      }
+
+      if [[ ! -f /etc/squid/squid.conf &&
+            ! -f /etc/squid3/squid.conf ]]; then
+        log_error "ไม่พบ config Squid"
+        return 1
+      fi
+
+      if ! svc_is_active squid &&
+         ! svc_is_active squid3; then
+        log_error "Squid ไม่ได้ทำงานอยู่"
+        log_warn "เมนูเปลี่ยนพอร์ตจะไม่ start service อัตโนมัติ"
+        return 1
+      fi
       ;;
-    *) log_error "target '$target' ไม่รองรับ"; return 1 ;;
+
+    *)
+      log_error "target '$target' ไม่รองรับ"
+      return 1
+      ;;
   esac
+
+  return 0
 }
 
 current_login_local_port() {
@@ -190,7 +236,7 @@ function_mode_connection() {
 
     case "$p_opt" in
       1)
-        ensure_port_service_installed ssh || {
+        require_port_service_ready ssh || {
           pause
           continue
         }
@@ -336,7 +382,7 @@ function_mode_connection() {
         ;;
 
       2)
-        ensure_port_service_installed dropbear || {
+        require_port_service_ready dropbear || {
           pause
           continue
         }
@@ -458,7 +504,7 @@ function_mode_connection() {
         ;;
 
       3)
-        ensure_port_service_installed stunnel || {
+        require_port_service_ready stunnel || {
           pause
           continue
         }
@@ -568,7 +614,7 @@ function_mode_connection() {
         ;;
 
       4)
-        ensure_port_service_installed squid || {
+        require_port_service_ready squid || {
           pause
           continue
         }

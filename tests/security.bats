@@ -1168,3 +1168,143 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+
+@test "port manager never installs or starts missing services implicitly" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+helper_start = text.index(
+    "require_port_service_ready() {"
+)
+helper_end = text.index(
+    "\n}",
+    helper_start,
+) + 2
+
+helper = text[helper_start:helper_end]
+
+menu_start = text.index(
+    "function_mode_connection() {"
+)
+menu_end = text.index(
+    "\nfunction_trafego() {",
+    menu_start,
+)
+
+menu = text[menu_start:menu_end]
+
+for forbidden in (
+    "install_pkg",
+    "apt-get",
+    "svc_enable",
+    "svc_start",
+):
+    if forbidden in helper:
+        raise SystemExit(
+            f"require-only helper contains side effect: {forbidden}"
+        )
+
+    if forbidden in menu:
+        raise SystemExit(
+            f"port menu contains implicit side effect: {forbidden}"
+        )
+
+if "ensure_port_service_installed" in menu:
+    raise SystemExit(
+        "port menu still invokes implicit installer"
+    )
+
+for service in (
+    "ssh",
+    "dropbear",
+    "stunnel",
+    "squid",
+):
+    marker = f"require_port_service_ready {service}"
+
+    if menu.count(marker) != 1:
+        raise SystemExit(
+            f"missing/duplicate readiness guard: {marker}"
+        )
+
+print("port manager has no implicit installation/start")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "stunnel and squid require configured active services before mutation" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+h_start = text.index(
+    "require_port_service_ready() {"
+)
+h_end = text.index(
+    "\n}",
+    h_start,
+) + 2
+
+helper = text[h_start:h_end]
+
+required = [
+    "/etc/stunnel/stunnel.conf",
+    "svc_is_active stunnel4",
+    "svc_is_active stunnel",
+    "/etc/squid/squid.conf",
+    "/etc/squid3/squid.conf",
+    "svc_is_active squid",
+    "svc_is_active squid3",
+]
+
+for marker in required:
+    if marker not in helper:
+        raise SystemExit(
+            f"readiness guard missing: {marker}"
+        )
+
+menu_start = text.index(
+    "function_mode_connection() {"
+)
+menu = text[menu_start:]
+
+st_start = menu.index("\n      3)")
+st_end = menu.index("\n      4)", st_start)
+stunnel = menu[st_start:st_end]
+
+sq_start = menu.index("\n      4)")
+sq_end = menu.index("\n      5)", sq_start)
+squid = menu[sq_start:sq_end]
+
+if stunnel.index(
+    "require_port_service_ready stunnel"
+) > stunnel.index(
+    'backup_file "$cfg_st"'
+):
+    raise SystemExit(
+        "Stunnel readiness guard occurs after mutation preparation"
+    )
+
+if squid.index(
+    "require_port_service_ready squid"
+) > squid.index(
+    'backup_file "$cfg_sq"'
+):
+    raise SystemExit(
+        "Squid readiness guard occurs after mutation preparation"
+    )
+
+print("inactive/unconfigured Stunnel and Squid fail before mutation")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
