@@ -778,18 +778,99 @@ function_mode_connection() {
   done
 }
 
+render_network_traffic() {
+  local dev_file="${1:-/proc/net/dev}"
+
+  [[ -r "$dev_file" ]] || {
+    log_error "ไม่สามารถอ่านข้อมูล Network Traffic: $dev_file"
+    return 1
+  }
+
+  awk '
+    function human(bytes, units, count, unit_idx) {
+      count = split("B KiB MiB GiB TiB", units, " ")
+      unit_idx = 1
+
+      while (bytes >= 1024 && unit_idx < count) {
+        bytes /= 1024
+        unit_idx++
+      }
+
+      if (unit_idx == 1) {
+        return sprintf("%.0f %s", bytes, units[unit_idx])
+      }
+
+      return sprintf("%.2f %s", bytes, units[unit_idx])
+    }
+
+    NR > 2 {
+      iface = $1
+      sub(/:$/, "", iface)
+
+      printf "  %-14s RX %-12s TX %-12s\n",
+             iface,
+             human($2),
+             human($10)
+    }
+  ' "$dev_file"
+}
+
 function_trafego() {
+  local listening established
+
   clear_screen
-  echo -e "${BLUE}┌──────────────────────────────────────────┐${NC}"
-  echo -e "${BLUE}│${BG_RED}           TRAFEGO DE REDE           ${NC}${BLUE}│${NC}"
-  echo -e "${BLUE}├──────────────────────────────────────────┤${NC}"
-  if command -v ss >/dev/null 2>&1; then
-    ss -tuln | grep -E 'ESTABLISHED|LISTEN' || true
-  elif command -v netstat >/dev/null 2>&1; then
-    netstat -tuln | grep -E 'ESTABLISHED|LISTEN' || true
+
+  echo -e "${BLUE}┌────────────────────────────────────────────────────────┐${NC}"
+  echo -e "${BLUE}│${BG_RED}              NETWORK TRAFFIC                  ${NC}${BLUE}│${NC}"
+  echo -e "${BLUE}├────────────────────────────────────────────────────────┤${NC}"
+  echo -e "  ${CYAN}RX/TX สะสมตาม Network Interface${NC}"
+  echo
+
+  if ! render_network_traffic; then
+    echo -e "${BLUE}└────────────────────────────────────────────────────────┘${NC}"
+    pause
+    return 1
   fi
-  echo -e "${BLUE}└──────────────────────────────────────────┘${NC}"
+
+  echo
+  echo -e "  ${CYAN}TCP Connections${NC}"
+
+  if command -v ss >/dev/null 2>&1; then
+    listening="$(
+      ss -H -ltn 2>/dev/null |
+      awk 'END { print NR + 0 }'
+    )"
+
+    established="$(
+      ss -H -tn state established 2>/dev/null |
+      awk 'END { print NR + 0 }'
+    )"
+
+    printf "  Listening   : %s\n" "$listening"
+    printf "  Established : %s\n" "$established"
+
+  elif command -v netstat >/dev/null 2>&1; then
+    listening="$(
+      netstat -ltn 2>/dev/null |
+      awk 'NR > 2 { count++ } END { print count + 0 }'
+    )"
+
+    established="$(
+      netstat -tn 2>/dev/null |
+      awk '$6 == "ESTABLISHED" { count++ } END { print count + 0 }'
+    )"
+
+    printf "  Listening   : %s\n" "$listening"
+    printf "  Established : %s\n" "$established"
+
+  else
+    log_warn "ไม่พบ ss หรือ netstat สำหรับสรุป TCP Connections"
+  fi
+
+  echo -e "${BLUE}└────────────────────────────────────────────────────────┘${NC}"
+
   pause
+  return 0
 }
 
 function_firewall() {

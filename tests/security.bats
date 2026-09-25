@@ -1645,3 +1645,123 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+
+@test "traffic menu is read-only and uses real interface counters" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+import re
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+match = re.search(
+    r"^function_trafego\(\) \{$",
+    text,
+    re.MULTILINE,
+)
+
+if not match:
+    raise SystemExit("function_trafego not found")
+
+start = match.start()
+end = text.index("\n}", start) + 2
+body = text[start:end]
+
+for forbidden in (
+    "install_pkg",
+    "apt-get",
+    "apt ",
+    "dnf ",
+    "yum ",
+    "apk ",
+    "systemctl ",
+    "service ",
+    "curl ",
+    "wget ",
+    "rm ",
+    "mv ",
+    "cp ",
+):
+    if forbidden in body:
+        raise SystemExit(
+            f"traffic menu contains side effect: {forbidden}"
+        )
+
+required = (
+    "render_network_traffic",
+    "ss -H -ltn",
+    "ss -H -tn state established",
+    "Listening",
+    "Established",
+)
+
+for marker in required:
+    if marker not in body:
+        raise SystemExit(
+            f"traffic marker missing: {marker}"
+        )
+
+print("traffic menu is read-only")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "traffic renderer reports RX and TX bytes from fixture" {
+  run bash -c '
+    set -eo pipefail
+
+    source src/lib/features/20_network.sh
+
+    tmp="$(mktemp)"
+    trap "rm -f \"$tmp\"" EXIT
+
+    cat > "$tmp" <<EOF
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 1024 1 0 0 0 0 0 0 2048 1 0 0 0 0 0 0
+  eth0: 1048576 10 0 0 0 0 0 0 2097152 20 0 0 0 0 0 0
+EOF
+
+    output="$(render_network_traffic "$tmp")"
+
+    [[ "$output" == *"lo"* ]]
+    [[ "$output" == *"1.00 KiB"* ]]
+    [[ "$output" == *"2.00 KiB"* ]]
+    [[ "$output" == *"eth0"* ]]
+    [[ "$output" == *"1.00 MiB"* ]]
+    [[ "$output" == *"2.00 MiB"* ]]
+
+    echo "$output"
+  '
+
+  [ "$status" -eq 0 ]
+}
+
+@test "traffic menu no longer confuses listening sockets with traffic" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+old = "ss -tuln | grep -E 'ESTABLISHED|LISTEN'"
+
+if old in text:
+    raise SystemExit(
+        "old socket-only traffic implementation remains"
+    )
+
+if "/proc/net/dev" not in text:
+    raise SystemExit(
+        "real interface traffic counters are missing"
+    )
+
+print("old traffic implementation removed")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
