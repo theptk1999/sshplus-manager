@@ -897,3 +897,243 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+@test "config backup is unique exact and fails closed on copy failure" {
+  run bash -c '
+    set -euo pipefail
+
+    tmp="$1"
+    mkdir -p "$tmp"
+
+    source src/lib/core/validation.sh
+
+    src="$tmp/config"
+    printf "%s\n" "original-data" > "$src"
+
+    first="$(backup_file "$src")"
+    second="$(backup_file "$src")"
+
+    [[ "$first" != "$second" ]]
+    [[ -f "$first" ]]
+    [[ -f "$second" ]]
+
+    cmp -s "$src" "$first"
+    cmp -s "$src" "$second"
+
+    cp() {
+      return 1
+    }
+
+    if backup_file "$src" >/dev/null 2>&1; then
+      echo "backup_file ignored copy failure"
+      exit 1
+    fi
+
+    echo "fail-closed unique config backup verified"
+  ' _ "$BATS_TEST_TMPDIR/config-backup"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "SSH restart helper propagates failure" {
+  run bash -c '
+    set -euo pipefail
+
+    source src/lib/core/service.sh
+
+    svc_restart() {
+      return 1
+    }
+
+    if restart_ssh_service; then
+      echo "restart failure was hidden"
+      exit 1
+    fi
+
+    calls=0
+
+    svc_restart() {
+      calls=$((calls + 1))
+
+      if [[ "$1" == "sshd" ]]; then
+        return 0
+      fi
+
+      return 1
+    }
+
+    restart_ssh_service
+
+    echo "SSH restart failure propagation verified"
+  '
+
+  [ "$status" -eq 0 ]
+}
+
+@test "SSH socket guard blocks active or enabled socket activation" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+start = text.index("ssh_socket_activation_active() {")
+end = text.index("\n}", start) + 2
+
+body = text[start:end]
+
+required = [
+    "systemctl is-active",
+    "--quiet ssh.socket",
+    "systemctl is-enabled",
+]
+
+for item in required:
+    if item not in body:
+        raise SystemExit(
+            f"missing socket guard: {item}"
+        )
+
+if body.index("systemctl is-active") > body.index(
+    "systemctl is-enabled"
+):
+    raise SystemExit(
+        "active/enabled socket checks are unexpectedly ordered"
+    )
+
+print("active/enabled ssh.socket guard verified")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "SSH port migration blocks risky state before modifying config" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+start = text.index("function_mode_connection() {")
+end = text.index("\n      2)", start)
+
+ssh = text[start:end]
+
+collision = ssh.index(
+    'is_port_in_use "$new_ssh"'
+)
+session = ssh.index(
+    "current_login_local_port"
+)
+socket = ssh.index(
+    "ssh_socket_activation_active"
+)
+websocket = ssh.index(
+    "svc_is_active sshplus-ws"
+)
+backup = ssh.index(
+    'backup_file "$ssh_cfg"'
+)
+
+if not (
+    collision
+    < session
+    < socket
+    < websocket
+    < backup
+):
+    raise SystemExit(
+        "SSH safety checks must run before config backup/write"
+    )
+
+if "sed -i" not in ssh:
+    raise SystemExit("SSH config update missing")
+
+write = ssh.index("sed -i")
+
+if backup > write:
+    raise SystemExit(
+        "SSH config is modified before backup"
+    )
+
+print("SSH pre-write safety ordering verified")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "Dropbear port migration has collision rollback and listener verification" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+menu = text[text.index("function_mode_connection() {"):]
+
+start = menu.index("\n      2)")
+end = menu.index("\n      3)", start)
+
+drop = menu[start:end]
+
+required = [
+    'is_port_in_use "$new_drop"',
+    'backup_file "$cfg_drop"',
+    "svc_restart dropbear",
+    "rollback_port_config",
+    'is_tcp_port_listening "$new_drop"',
+]
+
+for item in required:
+    if item not in drop:
+        raise SystemExit(
+            f"Dropbear safety marker missing: {item}"
+        )
+
+if not (
+    drop.index('is_port_in_use "$new_drop"')
+    < drop.index('backup_file "$cfg_drop"')
+    < drop.index("svc_restart dropbear")
+    < drop.index('is_tcp_port_listening "$new_drop"')
+):
+    raise SystemExit(
+        "Dropbear migration ordering is unsafe"
+    )
+
+print("Dropbear transactional migration markers verified")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "TCP listener helper matches exact port rather than substring" {
+  run bash -c '
+    set -euo pipefail
+
+    source src/lib/core/validation.sh
+
+    SS_OUT="LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*"
+
+    ss() {
+      printf "%s\n" "$SS_OUT"
+    }
+
+    if is_tcp_port_listening 22; then
+      echo "port 22 falsely matched port 2222"
+      exit 1
+    fi
+
+    SS_OUT="$(printf "%s\n%s\n" \
+      "LISTEN 0 128 0.0.0.0:2222 0.0.0.0:*" \
+      "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*")"
+
+    is_tcp_port_listening 22
+
+    echo "exact TCP listener matching verified"
+  '
+
+  [ "$status" -eq 0 ]
+}

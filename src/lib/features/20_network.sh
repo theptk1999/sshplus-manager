@@ -54,9 +54,53 @@ STUNEOF
   esac
 }
 
+current_login_local_port() {
+  local conn="${SSH_CONNECTION:-}"
+  local port=""
+
+  [[ -n "$conn" ]] || return 1
+
+  port="$(
+    awk '{print $4}' <<< "$conn"
+  )"
+
+  is_port "$port" || return 1
+  printf '%s\n' "$port"
+}
+
+ssh_socket_activation_active() {
+  command -v systemctl >/dev/null 2>&1 ||
+    return 1
+
+  if systemctl is-active \
+       --quiet ssh.socket 2>/dev/null; then
+    return 0
+  fi
+
+  if systemctl is-enabled \
+       --quiet ssh.socket 2>/dev/null; then
+    return 0
+  fi
+
+  return 1
+}
+
+rollback_port_config() {
+  local backup="${1:-}"
+  local target="${2:-}"
+
+  [[ -n "$backup" ]] || return 1
+  [[ -n "$target" ]] || return 1
+  [[ -e "$backup" || -L "$backup" ]] ||
+    return 1
+
+  cp -a -- "$backup" "$target"
+}
+
 function_mode_connection() {
   while true; do
     clear_screen
+
     echo -e "${BLUE}┌──────────────────────────────────────────┐${NC}"
     echo -e "${BLUE}│${BG_RED}        จัดการพอร์ต (PORTS)             ${NC}${BLUE}│${NC}"
     echo -e "${BLUE}├──────────────────────────────────────────┤${NC}"
@@ -67,85 +111,549 @@ function_mode_connection() {
     echo -e "${BLUE}│${WHITE} 5) ดู Port ที่เปิดอยู่                   ${NC}${BLUE}│${NC}"
     echo -e "${BLUE}│${WHITE} 0) ย้อนกลับ                              ${NC}${BLUE}│${NC}"
     echo -e "${BLUE}└──────────────────────────────────────────┘${NC}"
+
     read -r -p "เลือก: " p_opt
+
     case "$p_opt" in
       1)
-        ensure_port_service_installed ssh || { pause; continue; }
-        local ssh_cfg="/etc/ssh/sshd_config" curr_ssh
+        ensure_port_service_installed ssh || {
+          pause
+          continue
+        }
+
+        local ssh_cfg="/etc/ssh/sshd_config"
+        local curr_ssh=""
+        local new_ssh=""
+        local login_port=""
+        local ssh_backup=""
+        local sshd_bin=""
+
         curr_ssh="$(get_ssh_port)"
-        echo -e "Port ปัจจุบัน: ${GREEN}$curr_ssh${NC}"
+
+        echo -e \
+          "Port ปัจจุบัน: ${GREEN}$curr_ssh${NC}"
+
         read -r -p "Port ใหม่: " new_ssh
-        is_port "$new_ssh" || { log_error "Port ไม่ถูกต้อง"; pause; continue; }
-        local ssh_backup; ssh_backup="$(backup_file "$ssh_cfg")"
-        if grep -qE "^#?[[:space:]]*Port" "$ssh_cfg"; then
-          sed -i -E "s/^#?[[:space:]]*Port.*/Port ${new_ssh}/g" "$ssh_cfg"
-        else echo "Port ${new_ssh}" >> "$ssh_cfg"; fi
-        local sshd_bin; sshd_bin="$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)"
-        if [[ -x "$sshd_bin" ]] && ! "$sshd_bin" -t >/dev/null 2>&1; then
-          cp -a "$ssh_backup" "$ssh_cfg" 2>/dev/null || true
-          log_error "Config ไม่ผ่าน validation - rollback แล้ว"
-        else restart_ssh_service; log_info "เปลี่ยน SSH Port เป็น $new_ssh แล้ว!"; fi
-        pause ;;
+
+        is_port "$new_ssh" || {
+          log_error "Port ไม่ถูกต้อง"
+          pause
+          continue
+        }
+
+        if [[ "$new_ssh" == "$curr_ssh" ]]; then
+          log_info "Port SSH เป็น $new_ssh อยู่แล้ว"
+          pause
+          continue
+        fi
+
+        if is_port_in_use "$new_ssh"; then
+          log_error "Port $new_ssh ถูกใช้งานอยู่แล้ว"
+          pause
+          continue
+        fi
+
+        login_port="$(
+          current_login_local_port 2>/dev/null ||
+            true
+        )"
+
+        if [[ -n "$login_port" &&
+              "$login_port" == "$curr_ssh" ]]; then
+          log_error \
+            "ปฏิเสธการเปลี่ยน SSH Port: session ปัจจุบันกำลังใช้ Port $curr_ssh"
+          log_warn \
+            "เชื่อมต่อผ่าน Dropbear/console ก่อน แล้วจึงเปลี่ยน SSH Port"
+          pause
+          continue
+        fi
+
+        if ssh_socket_activation_active; then
+          log_error \
+            "ตรวจพบ systemd ssh.socket active/enabled และอาจควบคุม SSH Port"
+          log_warn \
+            "เมนูนี้จะไม่แก้ ssh.socket อัตโนมัติเพื่อป้องกัน VPS หลุด"
+          log_warn \
+            "ต้องใช้ Safe SSH Socket Migration แยกต่างหาก"
+          pause
+          continue
+        fi
+
+        if svc_is_active sshplus-ws; then
+          log_error \
+            "WebSocket กำลังใช้งานและผูก backend กับ SSH Port ปัจจุบัน"
+          log_warn \
+            "หยุด/ย้าย WebSocket backend ก่อนเปลี่ยน SSH Port"
+          pause
+          continue
+        fi
+
+        ssh_backup="$(
+          backup_file "$ssh_cfg"
+        )" || {
+          log_error "Backup sshd_config ไม่สำเร็จ"
+          pause
+          continue
+        }
+
+        if grep -qE \
+             "^#?[[:space:]]*Port" \
+             "$ssh_cfg"; then
+
+          sed -i -E \
+            "s/^#?[[:space:]]*Port.*/Port ${new_ssh}/g" \
+            "$ssh_cfg"
+        else
+          printf 'Port %s\n' \
+            "$new_ssh" >> "$ssh_cfg"
+        fi
+
+        sshd_bin="$(
+          command -v sshd 2>/dev/null ||
+            printf '/usr/sbin/sshd'
+        )"
+
+        if [[ ! -x "$sshd_bin" ]] ||
+           ! "$sshd_bin" -t >/dev/null 2>&1; then
+
+          rollback_port_config \
+            "$ssh_backup" \
+            "$ssh_cfg" || true
+
+          log_error \
+            "sshd config ไม่ผ่าน validation - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        if ! restart_ssh_service; then
+          rollback_port_config \
+            "$ssh_backup" \
+            "$ssh_cfg" || true
+
+          restart_ssh_service >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "Restart SSH ไม่สำเร็จ - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        sleep 1
+
+        if ! is_tcp_port_listening "$new_ssh"; then
+          rollback_port_config \
+            "$ssh_backup" \
+            "$ssh_cfg" || true
+
+          restart_ssh_service >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "ไม่พบ SSH listener ที่ Port $new_ssh - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        log_info \
+          "เปลี่ยน SSH Port เป็น $new_ssh สำเร็จและตรวจ listener แล้ว"
+        pause
+        ;;
+
       2)
-        ensure_port_service_installed dropbear || { pause; continue; }
+        ensure_port_service_installed dropbear || {
+          pause
+          continue
+        }
+
         local cfg_drop=""
-        [[ -f /etc/default/dropbear ]] && cfg_drop="/etc/default/dropbear"
-        [[ -f /etc/sysconfig/dropbear ]] && cfg_drop="/etc/sysconfig/dropbear"
-        [[ -z "$cfg_drop" ]] && { log_error "ไม่พบ config Dropbear"; pause; continue; }
-        local curr_drop; curr_drop="$(grep "^DROPBEAR_PORT=" "$cfg_drop" | cut -d= -f2 || true)"
-        [[ -z "$curr_drop" ]] && curr_drop="222"
-        echo -e "Port ปัจจุบัน: ${GREEN}$curr_drop${NC}"
+        local curr_drop=""
+        local new_drop=""
+        local login_port=""
+        local drop_backup=""
+
+        [[ -f /etc/default/dropbear ]] &&
+          cfg_drop="/etc/default/dropbear"
+
+        [[ -f /etc/sysconfig/dropbear ]] &&
+          cfg_drop="/etc/sysconfig/dropbear"
+
+        [[ -n "$cfg_drop" ]] || {
+          log_error "ไม่พบ config Dropbear"
+          pause
+          continue
+        }
+
+        curr_drop="$(
+          grep '^DROPBEAR_PORT=' "$cfg_drop" |
+          tail -n1 |
+          cut -d= -f2 ||
+          true
+        )"
+
+        [[ -n "$curr_drop" ]] ||
+          curr_drop="222"
+
+        echo -e \
+          "Port ปัจจุบัน: ${GREEN}$curr_drop${NC}"
+
         read -r -p "Port ใหม่: " new_drop
-        is_port "$new_drop" || { log_error "Port ไม่ถูกต้อง"; pause; continue; }
-        backup_file "$cfg_drop" >/dev/null
-        if grep -q "^DROPBEAR_PORT=" "$cfg_drop"; then
-          sed -i "s/^DROPBEAR_PORT=.*/DROPBEAR_PORT=${new_drop}/g" "$cfg_drop"
-        else echo "DROPBEAR_PORT=${new_drop}" >> "$cfg_drop"; fi
-        svc_restart dropbear; log_info "เปลี่ยน Dropbear Port เป็น $new_drop แล้ว!"; pause ;;
+
+        is_port "$new_drop" || {
+          log_error "Port ไม่ถูกต้อง"
+          pause
+          continue
+        }
+
+        if [[ "$new_drop" == "$curr_drop" ]]; then
+          log_info "Dropbear ใช้ Port $new_drop อยู่แล้ว"
+          pause
+          continue
+        fi
+
+        if is_port_in_use "$new_drop"; then
+          log_error "Port $new_drop ถูกใช้งานอยู่แล้ว"
+          pause
+          continue
+        fi
+
+        login_port="$(
+          current_login_local_port 2>/dev/null ||
+            true
+        )"
+
+        if [[ -n "$login_port" &&
+              "$login_port" == "$curr_drop" ]]; then
+          log_error \
+            "ปฏิเสธการเปลี่ยน Dropbear Port: session ปัจจุบันกำลังใช้ Port $curr_drop"
+          pause
+          continue
+        fi
+
+        drop_backup="$(
+          backup_file "$cfg_drop"
+        )" || {
+          log_error "Backup Dropbear config ไม่สำเร็จ"
+          pause
+          continue
+        }
+
+        if grep -q '^DROPBEAR_PORT=' "$cfg_drop"; then
+          sed -i \
+            "s/^DROPBEAR_PORT=.*/DROPBEAR_PORT=${new_drop}/g" \
+            "$cfg_drop"
+        else
+          printf 'DROPBEAR_PORT=%s\n' \
+            "$new_drop" >> "$cfg_drop"
+        fi
+
+        if ! svc_restart dropbear; then
+          rollback_port_config \
+            "$drop_backup" \
+            "$cfg_drop" || true
+
+          svc_restart dropbear >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "Restart Dropbear ไม่สำเร็จ - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        sleep 1
+
+        if ! is_tcp_port_listening "$new_drop"; then
+          rollback_port_config \
+            "$drop_backup" \
+            "$cfg_drop" || true
+
+          svc_restart dropbear >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "ไม่พบ Dropbear listener ที่ Port $new_drop - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        log_info \
+          "เปลี่ยน Dropbear Port เป็น $new_drop สำเร็จและตรวจ listener แล้ว"
+        pause
+        ;;
+
       3)
-        ensure_port_service_installed stunnel || { pause; continue; }
+        ensure_port_service_installed stunnel || {
+          pause
+          continue
+        }
+
         local cfg_st="/etc/stunnel/stunnel.conf"
-        [[ -f "$cfg_st" ]] || { log_error "ไม่พบ config Stunnel"; pause; continue; }
-        local curr_st; curr_st="$(grep "^accept" "$cfg_st" | head -n1 | awk '{print $3}')"
-        [[ -z "$curr_st" ]] && curr_st="443"
-        echo -e "Port ปัจจุบัน: ${GREEN}$curr_st${NC}"
+        local curr_st=""
+        local new_st=""
+        local st_backup=""
+
+        [[ -f "$cfg_st" ]] || {
+          log_error "ไม่พบ config Stunnel"
+          pause
+          continue
+        }
+
+        curr_st="$(
+          awk '
+            /^accept[[:space:]]*=/ {
+              print $3
+              exit
+            }
+          ' "$cfg_st"
+        )"
+
+        [[ -n "$curr_st" ]] ||
+          curr_st="443"
+
+        echo -e \
+          "Port ปัจจุบัน: ${GREEN}$curr_st${NC}"
+
         read -r -p "Port ใหม่: " new_st
-        is_port "$new_st" || { log_error "Port ไม่ถูกต้อง"; pause; continue; }
-        backup_file "$cfg_st" >/dev/null
-        if grep -q "^accept" "$cfg_st"; then
-          sed -i "s/^accept.*/accept = ${new_st}/g" "$cfg_st"
-        else printf "[ssh]\nclient = no\naccept = %s\nconnect = 127.0.0.1:%s\n" "$new_st" "$(get_ssh_port)" >> "$cfg_st"; fi
-        svc_restart stunnel4 || svc_restart stunnel
-        log_info "เปลี่ยน Stunnel Port เป็น $new_st แล้ว!"; pause ;;
+
+        is_port "$new_st" || {
+          log_error "Port ไม่ถูกต้อง"
+          pause
+          continue
+        }
+
+        if [[ "$new_st" == "$curr_st" ]]; then
+          log_info "Stunnel ใช้ Port $new_st อยู่แล้ว"
+          pause
+          continue
+        fi
+
+        if is_port_in_use "$new_st"; then
+          log_error "Port $new_st ถูกใช้งานอยู่แล้ว"
+          pause
+          continue
+        fi
+
+        st_backup="$(
+          backup_file "$cfg_st"
+        )" || {
+          log_error "Backup Stunnel config ไม่สำเร็จ"
+          pause
+          continue
+        }
+
+        if grep -q '^accept' "$cfg_st"; then
+          sed -i \
+            "s/^accept.*/accept = ${new_st}/g" \
+            "$cfg_st"
+        else
+          printf \
+            '[ssh]\nclient = no\naccept = %s\nconnect = 127.0.0.1:%s\n' \
+            "$new_st" \
+            "$(get_ssh_port)" >> "$cfg_st"
+        fi
+
+        if ! svc_restart stunnel4 &&
+           ! svc_restart stunnel; then
+
+          rollback_port_config \
+            "$st_backup" \
+            "$cfg_st" || true
+
+          svc_restart stunnel4 >/dev/null 2>&1 ||
+            svc_restart stunnel >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "Restart Stunnel ไม่สำเร็จ - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        sleep 1
+
+        if ! is_tcp_port_listening "$new_st"; then
+          rollback_port_config \
+            "$st_backup" \
+            "$cfg_st" || true
+
+          svc_restart stunnel4 >/dev/null 2>&1 ||
+            svc_restart stunnel >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "ไม่พบ Stunnel listener ที่ Port $new_st - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        log_info \
+          "เปลี่ยน Stunnel Port เป็น $new_st สำเร็จและตรวจ listener แล้ว"
+        pause
+        ;;
+
       4)
-        ensure_port_service_installed squid || { pause; continue; }
+        ensure_port_service_installed squid || {
+          pause
+          continue
+        }
+
         local cfg_sq=""
-        [[ -f /etc/squid/squid.conf ]] && cfg_sq="/etc/squid/squid.conf"
-        [[ -f /etc/squid3/squid.conf ]] && cfg_sq="/etc/squid3/squid.conf"
-        [[ -z "$cfg_sq" ]] && { log_error "ไม่พบ config Squid"; pause; continue; }
-        local curr_sq; curr_sq="$(grep "^http_port" "$cfg_sq" | head -n1 | awk '{print $2}')"
-        [[ -z "$curr_sq" ]] && curr_sq="3128"
-        echo -e "Port ปัจจุบัน: ${GREEN}$curr_sq${NC}"
+        local curr_sq=""
+        local new_sq=""
+        local sq_backup=""
+
+        [[ -f /etc/squid/squid.conf ]] &&
+          cfg_sq="/etc/squid/squid.conf"
+
+        [[ -f /etc/squid3/squid.conf ]] &&
+          cfg_sq="/etc/squid3/squid.conf"
+
+        [[ -n "$cfg_sq" ]] || {
+          log_error "ไม่พบ config Squid"
+          pause
+          continue
+        }
+
+        curr_sq="$(
+          awk '
+            /^http_port[[:space:]]+/ {
+              print $2
+              exit
+            }
+          ' "$cfg_sq"
+        )"
+
+        [[ -n "$curr_sq" ]] ||
+          curr_sq="3128"
+
+        echo -e \
+          "Port ปัจจุบัน: ${GREEN}$curr_sq${NC}"
+
         read -r -p "Port ใหม่: " new_sq
-        is_port "$new_sq" || { log_error "Port ไม่ถูกต้อง"; pause; continue; }
-        backup_file "$cfg_sq" >/dev/null
-        if grep -q "^http_port" "$cfg_sq"; then
-          sed -i "s/^http_port.*/http_port ${new_sq}/g" "$cfg_sq"
-        else echo "http_port ${new_sq}" >> "$cfg_sq"; fi
-        svc_restart squid || svc_restart squid3
-        log_info "เปลี่ยน Squid Port เป็น $new_sq แล้ว!"; pause ;;
+
+        is_port "$new_sq" || {
+          log_error "Port ไม่ถูกต้อง"
+          pause
+          continue
+        }
+
+        if [[ "$new_sq" == "$curr_sq" ]]; then
+          log_info "Squid ใช้ Port $new_sq อยู่แล้ว"
+          pause
+          continue
+        fi
+
+        if is_port_in_use "$new_sq"; then
+          log_error "Port $new_sq ถูกใช้งานอยู่แล้ว"
+          pause
+          continue
+        fi
+
+        sq_backup="$(
+          backup_file "$cfg_sq"
+        )" || {
+          log_error "Backup Squid config ไม่สำเร็จ"
+          pause
+          continue
+        }
+
+        if grep -q '^http_port' "$cfg_sq"; then
+          sed -i \
+            "s/^http_port.*/http_port ${new_sq}/g" \
+            "$cfg_sq"
+        else
+          printf 'http_port %s\n' \
+            "$new_sq" >> "$cfg_sq"
+        fi
+
+        if command -v squid >/dev/null 2>&1; then
+          if ! squid \
+               -k parse \
+               -f "$cfg_sq" \
+               >/dev/null 2>&1; then
+
+            rollback_port_config \
+              "$sq_backup" \
+              "$cfg_sq" || true
+
+            log_error \
+              "Squid config ไม่ผ่าน validation - rollback แล้ว"
+            pause
+            continue
+          fi
+        fi
+
+        if ! svc_restart squid &&
+           ! svc_restart squid3; then
+
+          rollback_port_config \
+            "$sq_backup" \
+            "$cfg_sq" || true
+
+          svc_restart squid >/dev/null 2>&1 ||
+            svc_restart squid3 >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "Restart Squid ไม่สำเร็จ - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        sleep 1
+
+        if ! is_tcp_port_listening "$new_sq"; then
+          rollback_port_config \
+            "$sq_backup" \
+            "$cfg_sq" || true
+
+          svc_restart squid >/dev/null 2>&1 ||
+            svc_restart squid3 >/dev/null 2>&1 ||
+            true
+
+          log_error \
+            "ไม่พบ Squid listener ที่ Port $new_sq - rollback แล้ว"
+          pause
+          continue
+        fi
+
+        log_info \
+          "เปลี่ยน Squid Port เป็น $new_sq สำเร็จและตรวจ listener แล้ว"
+        pause
+        ;;
+
       5)
         clear_screen
-        echo -e "${WHITE}Protocol  Local Address         Program${NC}"
-        echo -e "${YELLOW}------------------------------------------${NC}"
+        echo -e \
+          "${WHITE}Protocol  Local Address         Program${NC}"
+        echo -e \
+          "${YELLOW}------------------------------------------${NC}"
+
         if command -v ss >/dev/null 2>&1; then
-          ss -tulnp | grep LISTEN | awk '{print $1, $5, $7}' | column -t
+          ss -tulnp |
+            grep LISTEN |
+            awk '{print $1, $5, $7}' |
+            column -t
         elif command -v netstat >/dev/null 2>&1; then
-          netstat -tulnp | grep LISTEN | awk '{print $1, $4, $7}' | column -t
+          netstat -tulnp |
+            grep LISTEN |
+            awk '{print $1, $4, $7}' |
+            column -t
         fi
-        pause ;;
-      0) return ;;
-      *) log_error "เลือกไม่ถูกต้อง"; sleep 1 ;;
+
+        pause
+        ;;
+
+      0)
+        return
+        ;;
+
+      *)
+        log_error "เลือกไม่ถูกต้อง"
+        sleep 1
+        ;;
     esac
   done
 }

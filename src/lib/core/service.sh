@@ -155,4 +155,7 @@ svc_remove() {
   fi
 }
 
-restart_ssh_service() { svc_restart ssh || svc_restart sshd || true; }
+restart_ssh_service() {
+  svc_restart ssh ||
+    svc_restart sshd
+}

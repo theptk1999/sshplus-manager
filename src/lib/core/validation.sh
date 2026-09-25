@@ -122,11 +122,70 @@ is_port_in_use() {
   fi
 }
 
+is_tcp_port_listening() {
+  local port="${1:-}"
+
+  is_port "$port" || return 1
+
+  if command -v ss >/dev/null 2>&1; then
+    ss -H -ltn 2>/dev/null |
+      awk -v port="$port" '
+        {
+          address=$4
+          sub(/^.*:/, "", address)
+
+          if (address == port) {
+            found=1
+            exit
+          }
+        }
+
+        END {
+          exit(found ? 0 : 1)
+        }
+      '
+    return $?
+  fi
+
+  if command -v netstat >/dev/null 2>&1; then
+    netstat -ltn 2>/dev/null |
+      awk -v port="$port" '
+        NR > 2 {
+          address=$4
+          sub(/^.*:/, "", address)
+
+          if (address == port) {
+            found=1
+            exit
+          }
+        }
+
+        END {
+          exit(found ? 0 : 1)
+        }
+      '
+    return $?
+  fi
+
+  return 1
+}
+
 backup_file() {
   local file="${1:-}"
+  local stamp=""
+  local backup=""
+
   [[ -f "$file" ]] || return 1
-  local stamp
-  stamp="$(date +%Y%m%d_%H%M%S)"
-  cp -a "$file" "${file}.bak.${stamp}" 2>/dev/null || true
-  echo "${file}.bak.${stamp}"
+
+  stamp="$(date +%Y%m%d_%H%M%S)" || return 1
+
+  backup="${file}.bak.${stamp}.$$.${RANDOM}"
+
+  cp -a -- "$file" "$backup" 2>/dev/null ||
+    return 1
+
+  [[ -e "$backup" || -L "$backup" ]] ||
+    return 1
+
+  printf '%s\n' "$backup"
 }
