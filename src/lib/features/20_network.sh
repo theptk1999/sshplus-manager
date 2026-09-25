@@ -56,15 +56,89 @@ STUNEOF
 
 current_login_local_port() {
   local conn="${SSH_CONNECTION:-}"
+  local remote_addr=""
+  local remote_port=""
+  local local_addr=""
   local port=""
+  local extra=""
+  local pid="${BASHPID:-$$}"
+  local parent=""
+  local depth=0
 
-  [[ -n "$conn" ]] || return 1
+  #
+  # sudo normally removes SSH_CONNECTION from the command's
+  # environment, but the invoking sudo/shell ancestors still
+  # retain it. Walk a small bounded parent chain to recover it.
+  #
+  if [[ -z "$conn" ]]; then
+    while [[ "$depth" -lt 12 ]]; do
+      [[ "$pid" =~ ^[1-9][0-9]*$ ]] ||
+        break
 
-  port="$(
-    awk '{print $4}' <<< "$conn"
-  )"
+      if [[ -r "/proc/${pid}/environ" ]]; then
+        conn="$(
+          tr '\0' '\n' \
+            < "/proc/${pid}/environ" \
+            2>/dev/null |
+          awk '
+            /^SSH_CONNECTION=/ {
+              sub(/^SSH_CONNECTION=/, "")
+              print
+              exit
+            }
+          '
+        )"
 
-  is_port "$port" || return 1
+        [[ -n "$conn" ]] &&
+          break
+      fi
+
+      parent="$(
+        awk '
+          /^PPid:/ {
+            print $2
+            exit
+          }
+        ' "/proc/${pid}/status" 2>/dev/null ||
+        true
+      )"
+
+      [[ "$parent" =~ ^[1-9][0-9]*$ ]] ||
+        break
+
+      [[ "$parent" != "$pid" ]] ||
+        break
+
+      pid="$parent"
+      depth=$((depth + 1))
+    done
+  fi
+
+  [[ -n "$conn" ]] ||
+    return 1
+
+  read -r \
+    remote_addr \
+    remote_port \
+    local_addr \
+    port \
+    extra <<< "$conn"
+
+  [[ -n "$remote_addr" ]] ||
+    return 1
+
+  [[ -n "$local_addr" ]] ||
+    return 1
+
+  [[ -z "$extra" ]] ||
+    return 1
+
+  is_port "$remote_port" ||
+    return 1
+
+  is_port "$port" ||
+    return 1
+
   printf '%s\n' "$port"
 }
 

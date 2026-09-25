@@ -1137,3 +1137,34 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+
+@test "SSH login port detection survives sudo-style environment stripping" {
+  run env \
+    SSH_CONNECTION="198.51.100.10 45123 10.0.0.31 22022" \
+    bash -c '
+      set -eo pipefail
+
+      env -u SSH_CONNECTION bash -c '"'"'
+        set -eo pipefail
+
+        source src/lib/core/validation.sh
+        source src/lib/features/20_network.sh
+
+        if [[ -n "${SSH_CONNECTION:-}" ]]; then
+          echo "child unexpectedly inherited SSH_CONNECTION"
+          exit 1
+        fi
+
+        port="$(
+          current_login_local_port
+        )"
+
+        echo "detected-port=$port"
+
+        [[ "$port" == "22022" ]]
+      '"'"'
+    '
+
+  [ "$status" -eq 0 ]
+}
