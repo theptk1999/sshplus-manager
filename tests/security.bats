@@ -1765,3 +1765,68 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+
+@test "traffic renderer production call supplies required counter file" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+import re
+
+text = Path(
+    "src/lib/features/20_network.sh"
+).read_text(encoding="utf-8")
+
+renderer = re.search(
+    r"^render_network_traffic\(\) \{.*?^\}",
+    text,
+    re.MULTILINE | re.DOTALL,
+)
+
+if not renderer:
+    raise SystemExit(
+        "render_network_traffic not found"
+    )
+
+renderer_body = renderer.group(0)
+
+if '${1:?network device counter file is required}' not in renderer_body:
+    raise SystemExit(
+        "renderer does not require its counter-file argument"
+    )
+
+menu = re.search(
+    r"^function_trafego\(\) \{.*?^\}",
+    text,
+    re.MULTILINE | re.DOTALL,
+)
+
+if not menu:
+    raise SystemExit(
+        "function_trafego not found"
+    )
+
+menu_body = menu.group(0)
+
+expected_call = 'render_network_traffic "/proc/net/dev"'
+
+if menu_body.count(expected_call) != 1:
+    raise SystemExit(
+        "production traffic menu must pass /proc/net/dev exactly once"
+    )
+
+if re.search(
+    r'^[ \t]*render_network_traffic[ \t]*$',
+    menu_body,
+    re.MULTILINE,
+):
+    raise SystemExit(
+        "production contains argument-less renderer call"
+    )
+
+print(
+    "traffic renderer receives explicit production counter file"
+)
+PYTEST
+
+  [ "$status" -eq 0 ]
+}

@@ -779,7 +779,7 @@ function_mode_connection() {
 }
 
 render_network_traffic() {
-  local dev_file="${1:-/proc/net/dev}"
+  local dev_file="${1:?network device counter file is required}"
 
   [[ -r "$dev_file" ]] || {
     log_error "ไม่สามารถอ่านข้อมูล Network Traffic: $dev_file"
@@ -826,7 +826,7 @@ function_trafego() {
   echo -e "  ${CYAN}RX/TX สะสมตาม Network Interface${NC}"
   echo
 
-  if ! render_network_traffic; then
+  if ! render_network_traffic "/proc/net/dev"; then
     echo -e "${BLUE}└────────────────────────────────────────────────────────┘${NC}"
     pause
     return 1
