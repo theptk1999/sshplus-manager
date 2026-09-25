@@ -3,10 +3,23 @@
 # ==================================================
 
 function_speedtest() {
-  command -v speedtest-cli >/dev/null 2>&1 || install_pkg "speedtest-cli"
+  if ! command -v speedtest-cli >/dev/null 2>&1; then
+    log_error "ยังไม่ได้ติดตั้ง speedtest-cli"
+    log_warn "ติดตั้งได้จากเมนู 23 → เครื่องมือ (Tools)"
+    pause
+    return 1
+  fi
+
   log_info "Running speedtest..."
-  command -v speedtest-cli >/dev/null 2>&1 && speedtest-cli || log_error "ติดตั้งไม่สำเร็จ"
+
+  if ! speedtest-cli; then
+    log_error "Speedtest ทำงานไม่สำเร็จ"
+    pause
+    return 1
+  fi
+
   pause
+  return 0
 }
 
 function_otimizar() {

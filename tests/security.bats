@@ -1308,3 +1308,98 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+
+@test "speedtest menu never installs packages implicitly" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/40_tools.sh"
+).read_text(encoding="utf-8")
+
+start = text.index("function_speedtest() {")
+end = text.index("\n}", start) + 2
+
+body = text[start:end]
+
+for forbidden in (
+    "install_pkg",
+    "apt-get",
+    "apt ",
+    "pip ",
+    "curl ",
+    "wget ",
+):
+    if forbidden in body:
+        raise SystemExit(
+            f"speedtest menu contains implicit setup: {forbidden}"
+        )
+
+required = [
+    "command -v speedtest-cli",
+    'log_error "ยังไม่ได้ติดตั้ง speedtest-cli"',
+    "speedtest-cli",
+    'log_error "Speedtest ทำงานไม่สำเร็จ"',
+    "return 1",
+]
+
+for marker in required:
+    if marker not in body:
+        raise SystemExit(
+            f"speedtest guard missing: {marker}"
+        )
+
+print("speedtest menu is execution-only")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "speedtest menu handles missing command without invoking installer" {
+  run bash -c '
+    set -eo pipefail
+
+    source src/lib/features/40_tools.sh
+
+    messages=""
+    pauses=0
+
+    log_info() {
+      messages="${messages}INFO:$*\n"
+    }
+
+    log_warn() {
+      messages="${messages}WARN:$*\n"
+    }
+
+    log_error() {
+      messages="${messages}ERROR:$*\n"
+    }
+
+    pause() {
+      pauses=$((pauses + 1))
+    }
+
+    command() {
+      if [[ "${1:-}" == "-v" &&
+            "${2:-}" == "speedtest-cli" ]]; then
+        return 1
+      fi
+
+      builtin command "$@"
+    }
+
+    if function_speedtest; then
+      echo "missing speedtest unexpectedly succeeded"
+      exit 1
+    fi
+
+    [[ "$pauses" -eq 1 ]]
+    [[ "$messages" == *"ยังไม่ได้ติดตั้ง speedtest-cli"* ]]
+
+    echo "missing speedtest fails without installation"
+  '
+
+  [ "$status" -eq 0 ]
+}
