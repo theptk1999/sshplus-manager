@@ -464,33 +464,147 @@ function_list_users() {
 function_backup_users() {
   while true; do
     clear_screen
+
     echo "1) สร้าง Backup"
     echo "2) Restore Backup"
     echo "0) ย้อนกลับ"
+
     read -r -p "เลือก: " b_opt
+
     case "$b_opt" in
       1)
-        local backup_name=""
-        backup_name="backup_users_$(date +%Y%m%d_%H%M%S).db"
-        if ( flock -s 200 || exit 1; cp "${DB_FILE:-/root/usuarios.db}" "/root/$backup_name"; chmod 600 "/root/$backup_name" ) 200>"${DB_LOCK_FILE:-/root/usuarios.db.lock}"; then
-          log_info "Backup: /root/$backup_name"
-        else log_error "Backup ไม่สำเร็จ"; fi
-        pause ;;
+        if db_create_backup; then
+          log_info "Backup: $DB_LAST_BACKUP"
+        else
+          log_error "Backup ไม่สำเร็จ"
+        fi
+
+        pause
+        ;;
+
       2)
-        ls /root/backup_users_*.db 2>/dev/null || log_error "ไม่มีไฟล์ Backup"
-        read -r -p "ชื่อไฟล์ (0=ยกเลิก): " restore_file
-        [[ "$restore_file" == "0" || -z "$restore_file" ]] && continue
-        local restore_name="${restore_file##*/}"
-        [[ -f "/root/$restore_name" ]] || { log_error "ไม่พบไฟล์"; pause; continue; }
-        read -r -p "YES เพื่อยืนยัน: " confirm_restore
-        [[ "$confirm_restore" != "YES" ]] && continue
-        if ( flock -x 200 || exit 1; cp "/root/$restore_name" "${DB_FILE:-/root/usuarios.db}"; chmod 600 "${DB_FILE:-/root/usuarios.db}" ) 200>"${DB_LOCK_FILE:-/root/usuarios.db.lock}"; then
-          db_migrate_schema_if_needed || true
+        local -a backups=()
+        local backup_dir="${SSHPLUS_BACKUP_DIR:-/root}"
+        local restore_file=""
+        local restore_name=""
+        local restore_path=""
+        local confirm_restore=""
+        local confirm_adopt=""
+        local record_count=""
+
+        backup_dir="${backup_dir%/}"
+        [[ -n "$backup_dir" ]] || backup_dir="/"
+
+        mapfile -t backups < <(
+          find "$backup_dir" \
+            -maxdepth 1 \
+            -type f \
+            -name 'backup_users_*.db' \
+            -printf '%f
+' \
+            2>/dev/null |
+          sort
+        )
+
+        if [[ "${#backups[@]}" -eq 0 ]]; then
+          log_error "ไม่มีไฟล์ Backup"
+          pause
+          continue
+        fi
+
+        echo "Backup ที่พบ:"
+        printf '  %s
+' "${backups[@]}"
+
+        read -r -p \
+          "ชื่อไฟล์ (0=ยกเลิก): " \
+          restore_file
+
+        [[ "$restore_file" == "0" ||
+           -z "$restore_file" ]] &&
+          continue
+
+        restore_name="${restore_file##*/}"
+        restore_path="$backup_dir/$restore_name"
+
+        if ! db_validate_backup_file "$restore_path"; then
+          log_error \
+            "Backup ไม่ผ่านการตรวจสอบความปลอดภัย/โครงสร้าง"
+          pause
+          continue
+        fi
+
+        if ! db_report_restore_adoptions "$restore_path"; then
+          log_error "ตรวจสอบ Linux users ก่อน Restore ไม่สำเร็จ"
+          pause
+          continue
+        fi
+
+        if [[ "$DB_RESTORE_ADOPTION_COUNT" -gt 0 ]]; then
+          read -r -p \
+            "พิมพ์ ADOPT เพื่อยืนยันการนำ user เหล่านี้กลับเข้า DB: " \
+            confirm_adopt
+
+          [[ "$confirm_adopt" == "ADOPT" ]] ||
+            continue
+        fi
+
+        record_count="$(
+          awk '
+            NF {
+              count++
+            }
+            END {
+              print count + 0
+            }
+          ' "$restore_path"
+        )"
+
+        echo
+        echo "ไฟล์       : $restore_name"
+        echo "จำนวนบัญชี : $record_count"
+        echo
+        log_warn \
+          "Restore จะเปลี่ยนเฉพาะฐานข้อมูล SSHPlus"
+        log_warn \
+          "จะไม่สร้างหรือลบ Linux user อัตโนมัติ"
+        log_warn \
+          "ระบบจะสร้าง Safety Backup ก่อนเขียนทับ DB"
+
+        read -r -p \
+          "พิมพ์ YES เพื่อยืนยัน Restore: " \
+          confirm_restore
+
+        [[ "$confirm_restore" != "YES" ]] &&
+          continue
+
+        if db_restore_backup \
+             "$restore_path" \
+             "$confirm_adopt"; then
           log_info "Restore สำเร็จ!"
-        else log_error "Restore ไม่สำเร็จ"; fi
-        pause ;;
-      0) return ;;
-      *) log_error "เลือกไม่ถูกต้อง"; sleep 1 ;;
+          log_info \
+            "Safety Backup: $DB_RESTORE_SAFETY_BACKUP"
+
+          echo
+          log_info \
+            "ตรวจสอบความสอดคล้อง DB กับ Linux accounts..."
+          db_report_restore_mismatches
+        else
+          log_error \
+            "Restore ล้มเหลว DB เดิมไม่ได้ถูกแทนที่"
+        fi
+
+        pause
+        ;;
+
+      0)
+        return
+        ;;
+
+      *)
+        log_error "เลือกไม่ถูกต้อง"
+        sleep 1
+        ;;
     esac
   done
 }

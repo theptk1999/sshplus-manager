@@ -502,3 +502,398 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+@test "backup restore validator rejects malformed database records" {
+  run bash -c '
+    set -euo pipefail
+
+    tmp="$1"
+    mkdir -p "$tmp"
+
+    source src/lib/core/validation.sh
+    source src/lib/data/user_db.sh
+
+    valid="$tmp/valid.db"
+
+    cat > "$valid" <<DATA
+zzbtuser01:2:1791158400
+zzbtuser02:1:253402041600
+DATA
+
+    db_validate_file "$valid"
+
+    printf "%s\n" \
+      "zzbtuser01:1:1791158400:extra" \
+      > "$tmp/extra.db"
+
+    if db_validate_file "$tmp/extra.db"; then
+      echo "accepted extra field"
+      exit 1
+    fi
+
+    cat > "$tmp/duplicate.db" <<DATA
+zzbtuser01:1:1791158400
+zzbtuser01:2:1791158401
+DATA
+
+    if db_validate_file "$tmp/duplicate.db"; then
+      echo "accepted duplicate username"
+      exit 1
+    fi
+
+    printf "%s\n" \
+      "zzbtuser01:0:1791158400" \
+      > "$tmp/zero-limit.db"
+
+    if db_validate_file "$tmp/zero-limit.db"; then
+      echo "accepted zero limit"
+      exit 1
+    fi
+
+    printf "%s\n" \
+      "zzbtuser01:1:0" \
+      > "$tmp/zero-expiry.db"
+
+    if db_validate_file "$tmp/zero-expiry.db"; then
+      echo "accepted zero expiry"
+      exit 1
+    fi
+
+    printf "%s\n" \
+      "zzbtuser01:1:253402300800" \
+      > "$tmp/huge-expiry.db"
+
+    if db_validate_file "$tmp/huge-expiry.db"; then
+      echo "accepted expiry beyond year 9999"
+      exit 1
+    fi
+
+    printf "%s\n" \
+      "root:1:1791158400" \
+      > "$tmp/root.db"
+
+    if db_validate_file "$tmp/root.db"; then
+      echo "accepted protected username"
+      exit 1
+    fi
+
+    echo "DB validation fail-closed behavior verified"
+  ' _ "$BATS_TEST_TMPDIR/validate"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "backup creation produces validated private exact copy" {
+  run bash -c '
+    set -euo pipefail
+
+    tmp="$1"
+    db="$tmp/usuarios.db"
+    lock="$tmp/usuarios.db.lock"
+    backups="$tmp/backups"
+
+    mkdir -p "$backups"
+
+    cat > "$db" <<DATA
+zzbtcopy01:2:1791158400
+zzbtcopy02:1:253402041600
+DATA
+
+    chmod 600 "$db"
+
+    export DB_FILE="$db"
+    export DB_LOCK_FILE="$lock"
+    export SSHPLUS_BACKUP_DIR="$backups"
+    export SSHPLUS_BACKUP_UID
+    export SSHPLUS_BACKUP_GID
+
+    SSHPLUS_BACKUP_UID="$(id -u)"
+    SSHPLUS_BACKUP_GID="$(id -g)"
+
+    source src/lib/core/validation.sh
+    source src/lib/data/user_db.sh
+
+    db_create_backup
+
+    [[ -n "$DB_LAST_BACKUP" ]]
+    [[ -f "$DB_LAST_BACKUP" ]]
+    [[ ! -L "$DB_LAST_BACKUP" ]]
+
+    cmp -s "$db" "$DB_LAST_BACKUP"
+
+    [[ "$(stat -c "%a" "$DB_LAST_BACKUP")" == "600" ]]
+    [[ "$(stat -c "%u" "$DB_LAST_BACKUP")" == "$SSHPLUS_BACKUP_UID" ]]
+    [[ "$(stat -c "%g" "$DB_LAST_BACKUP")" == "$SSHPLUS_BACKUP_GID" ]]
+
+    db_validate_backup_file "$DB_LAST_BACKUP"
+
+    case "${DB_LAST_BACKUP##*/}" in
+      backup_users_*.db) ;;
+      *)
+        echo "unsafe backup filename"
+        exit 1
+        ;;
+    esac
+
+    echo "private exact backup verified"
+  ' _ "$BATS_TEST_TMPDIR/create"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "restore atomically replaces DB and preserves pre-restore safety backup" {
+  run bash -c '
+    set -euo pipefail
+
+    tmp="$1"
+    db="$tmp/usuarios.db"
+    lock="$tmp/usuarios.db.lock"
+    backups="$tmp/backups"
+
+    mkdir -p "$backups"
+
+    export DB_FILE="$db"
+    export DB_LOCK_FILE="$lock"
+    export SSHPLUS_BACKUP_DIR="$backups"
+
+    export SSHPLUS_BACKUP_UID="$(id -u)"
+    export SSHPLUS_BACKUP_GID="$(id -g)"
+    export SSHPLUS_DB_UID="$(id -u)"
+    export SSHPLUS_DB_GID="$(id -g)"
+
+    source src/lib/core/validation.sh
+    source src/lib/data/user_db.sh
+
+    cat > "$db" <<DATA
+zzbtorig01:2:1791158400
+DATA
+    chmod 600 "$db"
+
+    db_create_backup
+    source_backup="$DB_LAST_BACKUP"
+
+    cat > "$db" <<DATA
+zzbtnew01:7:1791763200
+DATA
+    chmod 600 "$db"
+
+    cp "$db" "$tmp/pre-restore.expected"
+
+    db_restore_backup "$source_backup"
+
+    cmp -s "$db" "$source_backup"
+
+    [[ -n "$DB_RESTORE_SAFETY_BACKUP" ]]
+    [[ -f "$DB_RESTORE_SAFETY_BACKUP" ]]
+
+    cmp -s \
+      "$DB_RESTORE_SAFETY_BACKUP" \
+      "$tmp/pre-restore.expected"
+
+    [[ "$(stat -c "%a" "$db")" == "600" ]]
+    [[ "$(stat -c "%a" "$DB_RESTORE_SAFETY_BACKUP")" == "600" ]]
+
+    db_validate_backup_file \
+      "$DB_RESTORE_SAFETY_BACKUP"
+
+    echo "transactional restore and safety backup verified"
+  ' _ "$BATS_TEST_TMPDIR/restore"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "invalid restore fails without replacing current DB" {
+  run bash -c '
+    set -euo pipefail
+
+    tmp="$1"
+    db="$tmp/usuarios.db"
+    lock="$tmp/usuarios.db.lock"
+    backups="$tmp/backups"
+
+    mkdir -p "$backups"
+
+    export DB_FILE="$db"
+    export DB_LOCK_FILE="$lock"
+    export SSHPLUS_BACKUP_DIR="$backups"
+
+    export SSHPLUS_BACKUP_UID="$(id -u)"
+    export SSHPLUS_BACKUP_GID="$(id -g)"
+    export SSHPLUS_DB_UID="$(id -u)"
+    export SSHPLUS_DB_GID="$(id -g)"
+
+    source src/lib/core/validation.sh
+    source src/lib/data/user_db.sh
+
+    cat > "$db" <<DATA
+zzbtsafe01:3:1791158400
+DATA
+    chmod 600 "$db"
+
+    cp "$db" "$tmp/original.expected"
+
+    bad="$backups/backup_users_20260923_120000_bad.db"
+
+    cat > "$bad" <<DATA
+zzbtsafe01:0:0
+DATA
+
+    chmod 600 "$bad"
+
+    set +e
+    db_restore_backup "$bad"
+    rc=$?
+    set -e
+
+    [[ "$rc" -ne 0 ]]
+
+    cmp -s \
+      "$db" \
+      "$tmp/original.expected"
+
+    [[ -z "$DB_RESTORE_SAFETY_BACKUP" ]]
+
+    echo "invalid restore preserved current DB"
+  ' _ "$BATS_TEST_TMPDIR/reject"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "restore primitive requires explicit ADOPT for unmanaged existing account" {
+  run bash -c '
+    set -euo pipefail
+
+    tmp="$1"
+    db="$tmp/usuarios.db"
+    lock="$tmp/usuarios.db.lock"
+    backups="$tmp/backups"
+
+    mkdir -p "$backups"
+
+    export DB_FILE="$db"
+    export DB_LOCK_FILE="$lock"
+    export SSHPLUS_BACKUP_DIR="$backups"
+
+    export SSHPLUS_BACKUP_UID="$(id -u)"
+    export SSHPLUS_BACKUP_GID="$(id -g)"
+    export SSHPLUS_DB_UID="$(id -u)"
+    export SSHPLUS_DB_GID="$(id -g)"
+
+    source src/lib/core/validation.sh
+    source src/lib/data/user_db.sh
+
+    cat > "$db" <<DATA
+zzbtbase01:1:1791158400
+DATA
+    chmod 600 "$db"
+
+    cp "$db" "$tmp/original.expected"
+
+    backup="$backups/backup_users_20260923_130000_adopt.db"
+
+    cat > "$backup" <<DATA
+zzbtadopt01:2:1791763200
+DATA
+    chmod 600 "$backup"
+
+    id() {
+      if [[ "${1:-}" == "zzbtadopt01" ]]; then
+        return 0
+      fi
+
+      command id "$@"
+    }
+
+    is_safe_deletable_local_user() {
+      [[ "${1:-}" == "zzbtadopt01" ]]
+    }
+
+    db_user_is_managed() {
+      return 1
+    }
+
+    db_validate_backup_file "$backup"
+
+    set +e
+    db_restore_backup "$backup"
+    rc=$?
+    set -e
+
+    [[ "$rc" -eq 2 ]]
+
+    cmp -s \
+      "$db" \
+      "$tmp/original.expected"
+
+    [[ -z "$DB_RESTORE_SAFETY_BACKUP" ]]
+
+    db_restore_backup \
+      "$backup" \
+      "ADOPT"
+
+    grep -qx \
+      "zzbtadopt01:2:1791763200" \
+      "$db"
+
+    [[ -n "$DB_RESTORE_SAFETY_BACKUP" ]]
+    [[ -f "$DB_RESTORE_SAFETY_BACKUP" ]]
+
+    echo "internal ADOPT enforcement verified"
+  ' _ "$BATS_TEST_TMPDIR/adopt"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "restore enforces ADOPT against exact validated restore copy" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/data/user_db.sh"
+).read_text(encoding="utf-8")
+
+start = text.index("db_restore_backup() {")
+end = text.index(
+    "\ndb_report_restore_mismatches() {",
+    start,
+)
+
+body = text[start:end]
+
+copy_pos = body.index(
+    'cp -- "$source" "$restore_temp"'
+)
+
+validate_pos = body.index(
+    'db_validate_file "$restore_temp"'
+)
+
+adopt_pos = body.index(
+    'db_report_restore_adoptions "$restore_temp"'
+)
+
+move_pos = body.index(
+    'mv -- "$restore_temp" "$db"'
+)
+
+if not (
+    copy_pos
+    < validate_pos
+    < adopt_pos
+    < move_pos
+):
+    raise SystemExit(
+        "unsafe restore order: "
+        "copy -> validate -> ADOPT -> atomic move required"
+    )
+
+if 'db_report_restore_adoptions "$source"' in body:
+    raise SystemExit(
+        "ADOPT is still checked against mutable source"
+    )
+
+print("exact-copy ADOPT ordering verified")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
