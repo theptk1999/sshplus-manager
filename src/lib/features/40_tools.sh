@@ -22,10 +22,53 @@ function_speedtest() {
   return 0
 }
 
+can_drop_filesystem_caches() {
+  [[ -w /proc/sys/vm/drop_caches ]]
+}
+
+drop_filesystem_caches() {
+  sync || return 1
+  printf '3\n' > /proc/sys/vm/drop_caches
+}
+
 function_otimizar() {
-  log_info "กำลังล้าง Cache..."
-  sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
-  log_info "ล้าง RAM เรียบร้อย!"; sleep 1
+  local confirm
+
+  require_root || return 1
+
+  if ! can_drop_filesystem_caches; then
+    log_error "ไม่สามารถเขียน /proc/sys/vm/drop_caches ได้"
+    pause
+    return 1
+  fi
+
+  log_warn "การทำงานนี้จะล้าง filesystem page cache, dentries และ inodes"
+  log_warn "อาจทำให้ Disk I/O หรือ latency สูงขึ้นชั่วคราว"
+  printf "พิมพ์ YES เพื่อยืนยัน: "
+
+  if ! read -r confirm; then
+    log_error "ไม่สามารถอ่านคำยืนยันได้"
+    pause
+    return 1
+  fi
+
+  if [[ "$confirm" != "YES" ]]; then
+    log_info "ยกเลิกการล้าง filesystem cache"
+    pause
+    return 0
+  fi
+
+  log_info "กำลัง sync filesystem และล้าง cache..."
+
+  if ! drop_filesystem_caches; then
+    log_error "ล้าง filesystem cache ไม่สำเร็จ"
+    pause
+    return 1
+  fi
+
+  log_info "ล้าง filesystem cache เรียบร้อย"
+  pause
+  return 0
 }
 
 function_info_sistema() {

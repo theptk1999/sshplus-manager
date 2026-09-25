@@ -1403,3 +1403,245 @@ PYTEST
 
   [ "$status" -eq 0 ]
 }
+
+
+@test "cache cleanup menu requires explicit confirmation and fails closed" {
+  run python3 - <<'PYTEST'
+from pathlib import Path
+
+text = Path(
+    "src/lib/features/40_tools.sh"
+).read_text(encoding="utf-8")
+
+import re
+
+for name in (
+    "can_drop_filesystem_caches",
+    "drop_filesystem_caches",
+    "function_otimizar",
+):
+    pattern = rf"^{re.escape(name)}\(\) \{{"
+
+    if len(re.findall(pattern, text, re.MULTILINE)) != 1:
+        raise SystemExit(
+            f"missing/duplicated function: {name}"
+        )
+
+drop_match = re.search(
+    r"^drop_filesystem_caches\(\) \{$",
+    text,
+    re.MULTILINE,
+)
+
+if not drop_match:
+    raise SystemExit(
+        "drop_filesystem_caches definition not found"
+    )
+
+drop_start = drop_match.start()
+drop_end = text.index(
+    "\n}",
+    drop_start,
+) + 2
+
+drop = text[drop_start:drop_end]
+
+for marker in (
+    "sync || return 1",
+    "printf '3\\n' > /proc/sys/vm/drop_caches",
+):
+    if marker not in drop:
+        raise SystemExit(
+            f"cache drop helper missing: {marker}"
+        )
+
+if "|| true" in drop:
+    raise SystemExit(
+        "cache drop helper suppresses failure"
+    )
+
+menu_start = text.index(
+    "function_otimizar() {"
+)
+menu_end = text.index(
+    "\n}",
+    menu_start,
+) + 2
+
+menu = text[menu_start:menu_end]
+
+required = (
+    "require_root",
+    "can_drop_filesystem_caches",
+    '[[ "$confirm" != "YES" ]]',
+    "drop_filesystem_caches",
+    'log_error "ล้าง filesystem cache ไม่สำเร็จ"',
+    'log_info "ล้าง filesystem cache เรียบร้อย"',
+)
+
+for marker in required:
+    if marker not in menu:
+        raise SystemExit(
+            f"cache cleanup guard missing: {marker}"
+        )
+
+if "ล้าง RAM เรียบร้อย" in menu:
+    raise SystemExit(
+        "misleading RAM-cleanup message remains"
+    )
+
+print("cache cleanup is explicit and fail-closed")
+PYTEST
+
+  [ "$status" -eq 0 ]
+}
+
+@test "cache cleanup cancellation performs no cache drop" {
+  run bash -c '
+    set -eo pipefail
+
+    source src/lib/features/40_tools.sh
+
+    calls=0
+    messages=""
+
+    require_root() {
+      return 0
+    }
+
+    can_drop_filesystem_caches() {
+      return 0
+    }
+
+    drop_filesystem_caches() {
+      calls=$((calls + 1))
+      return 0
+    }
+
+    log_info() {
+      messages="${messages}INFO:$*\n"
+    }
+
+    log_warn() {
+      messages="${messages}WARN:$*\n"
+    }
+
+    log_error() {
+      messages="${messages}ERROR:$*\n"
+    }
+
+    pause() {
+      :
+    }
+
+    function_otimizar <<< "NO"
+
+    [[ "$calls" -eq 0 ]]
+    [[ "$messages" == *"ยกเลิกการล้าง filesystem cache"* ]]
+
+    echo "cancellation performs no cache drop"
+  '
+
+  [ "$status" -eq 0 ]
+}
+
+@test "cache cleanup confirmation invokes cache drop exactly once" {
+  run bash -c '
+    set -eo pipefail
+
+    source src/lib/features/40_tools.sh
+
+    calls=0
+    messages=""
+
+    require_root() {
+      return 0
+    }
+
+    can_drop_filesystem_caches() {
+      return 0
+    }
+
+    drop_filesystem_caches() {
+      calls=$((calls + 1))
+      return 0
+    }
+
+    log_info() {
+      messages="${messages}INFO:$*\n"
+    }
+
+    log_warn() {
+      messages="${messages}WARN:$*\n"
+    }
+
+    log_error() {
+      messages="${messages}ERROR:$*\n"
+    }
+
+    pause() {
+      :
+    }
+
+    function_otimizar <<< "YES"
+
+    [[ "$calls" -eq 1 ]]
+    [[ "$messages" == *"ล้าง filesystem cache เรียบร้อย"* ]]
+
+    echo "confirmed cleanup invokes cache drop once"
+  '
+
+  [ "$status" -eq 0 ]
+}
+
+@test "cache cleanup propagates cache drop failure" {
+  run bash -c '
+    set -eo pipefail
+
+    source src/lib/features/40_tools.sh
+
+    calls=0
+    messages=""
+
+    require_root() {
+      return 0
+    }
+
+    can_drop_filesystem_caches() {
+      return 0
+    }
+
+    drop_filesystem_caches() {
+      calls=$((calls + 1))
+      return 1
+    }
+
+    log_info() {
+      messages="${messages}INFO:$*\n"
+    }
+
+    log_warn() {
+      messages="${messages}WARN:$*\n"
+    }
+
+    log_error() {
+      messages="${messages}ERROR:$*\n"
+    }
+
+    pause() {
+      :
+    }
+
+    if function_otimizar <<< "YES"; then
+      echo "cache-drop failure unexpectedly succeeded"
+      exit 1
+    fi
+
+    [[ "$calls" -eq 1 ]]
+    [[ "$messages" == *"ล้าง filesystem cache ไม่สำเร็จ"* ]]
+
+    echo "cache-drop failure propagates correctly"
+  '
+
+  [ "$status" -eq 0 ]
+}
